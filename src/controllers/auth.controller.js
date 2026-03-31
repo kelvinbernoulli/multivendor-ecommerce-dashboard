@@ -1,5 +1,6 @@
 import Auth from "#models/auth.model.js";
 import UserModel from "#models/user.model.js";
+import VendorModel from "#models/vendor.model.js";
 import { registerSchema } from "#schemas/auth.schema.js";
 import ERROR_CODES from "#utils/error.codes.js";
 import { normalizePhone, passwordHash, validatePassword } from "#utils/helpers.js";
@@ -7,25 +8,30 @@ import { normalizePhone, passwordHash, validatePassword } from "#utils/helpers.j
 export const register = async (req, res) => {
     try {
         const { body } = req;
-        const { email, password, country_id, vendor_id } = body;
 
         const { error } = registerSchema.validate(body);
         if (error) {
             return respondWithError(res, 422, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
         }
 
+        const { email, password, country_id, vendor_id } = body;
+
         if (!validatePassword(password)) {
             return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const [emailExist, countryData, vendorData] = await Promise.allSettled([
+        const [emailExist, vendorUser, countryData, vendorData] = await Promise.allSettled([
             UserModel.emailExists(email),
+            VendorModel.emailExists(email, vendor_id),
             UserModel.getCountryById(country_id),
             vendor_id ? UserModel.getVendorById(vendor_id) : null
         ]);
 
         if (emailExist) {
             return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
+        }
+        if (vendorUser) {
+            return respondWithError(res, 409, `Email ${email} already exists for another vendor!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
         if (!countryData) {

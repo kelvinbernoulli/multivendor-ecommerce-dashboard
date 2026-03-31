@@ -309,6 +309,27 @@ export const get_table_count = async (tb_name, conditionColumn, conditionValue) 
     }
 };
 
+export const duplicate_check_by_columns = async (tableName, columns, values) => {
+    if (columns.length === 0) {
+        throw new Error('duplicate_check_by_columns: at least one column is required');
+    }
+
+    if (columns.length !== values.length) {
+        throw new Error('duplicate_check_by_columns: columns and values arrays must be the same length');
+    }
+
+    const conditions = columns.map((col, i) => `${col} = $${i + 1}`);
+
+    const { rows } = await pool.query(
+        `SELECT id FROM ${tableName}
+     WHERE ${conditions.join(' OR ')}
+     LIMIT 1`,
+        values
+    );
+
+    return rows;
+};
+
 export default {
     insert,
     select_all_by_key,
@@ -329,5 +350,6 @@ export default {
     select_by_keys,
     delete_by_keys,
     delete_by_column,
-    get_table_count
+    get_table_count,
+    duplicate_check_by_columns,
 };

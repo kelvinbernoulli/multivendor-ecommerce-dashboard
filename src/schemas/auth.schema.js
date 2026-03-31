@@ -4,8 +4,8 @@ const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*#?&])[A-Za-z\d@
 const phoneRegex = /^(\+234|0)[789][01]\d{8}$/;
 
 export const registerSchema = Joi.object({
-    firstname: Joi.string().trim().min(2).required().label("First name"),
-    lastname: Joi.string().trim().min(2).required().label("Last name"),
+    firstname: Joi.string().trim().min(2).max(100).required().label("First name"),
+    lastname: Joi.string().trim().min(2).max(100).required().label("Last name"),
     email: Joi.string().email().lowercase().required().label("Email"),
     password: Joi.string()
         .pattern(passwordRegex)
@@ -22,12 +22,13 @@ export const registerSchema = Joi.object({
         .label("Phone")
         .messages({
             "string.pattern.base":
-                "Phone must be a valid Nigerian number (e.g. 08012345678 or +2348012345678).",
+                "Phone must be a valid international number format.",
         }),
+    country_id: Joi.number().integer().positive().required().label("Country ID"),
 });
 
 export const loginSchema = Joi.object({
-    email: Joi.string().email().lowercase().required(),
+    email: Joi.string().email().lowercase().required().label("Email"),
     password: Joi.string().required().label("Password")
 });
 

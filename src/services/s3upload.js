@@ -12,7 +12,7 @@ const s3Client = new S3Client({
     },
 });
 
-const getBase64Extension = (base64Data) => {
+export const getBase64Extension = (base64Data) => {
     const matches = base64Data.match(/^data:(.+);base64,/);
     if (matches && matches[1]) {
         const contentType = matches[1];
@@ -21,7 +21,7 @@ const getBase64Extension = (base64Data) => {
     }
 };
 
-const S3upload = async (req, res, filename, base64Data = null) => {
+export const S3upload = async (req, res, filename, base64Data = null) => {
     let fileBuffer;
     let contentType = mime.lookup(filename) || 'application/octet-stream';
 
@@ -69,7 +69,7 @@ const S3upload = async (req, res, filename, base64Data = null) => {
     }
 }
 
-const S3delete = async (key) => {
+export const S3delete = async (key) => {
     const deleteParams = {
         Bucket: process.env.S3_BUCKET,
         Key: key
