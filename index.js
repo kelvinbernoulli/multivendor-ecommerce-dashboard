@@ -18,6 +18,7 @@ import auth from "#routes/auth.routes.js";
 import admin from "#routes/admin.routes.js";
 import web from "#routes/web.routes.js";
 import passport from 'passport';
+import sessionMiddleware from '#config/session.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -66,6 +67,7 @@ app.options("/{*splat}", cors());
 
 // Parsing
 app.use(cookieParser());
+app.use(sessionMiddleware);
 app.use(bodyParser.json({ limit: REQUEST_SIZE_LIMIT }));
 app.use(bodyParser.urlencoded({ limit: REQUEST_SIZE_LIMIT, extended: true }));
 app.use(passport.initialize());

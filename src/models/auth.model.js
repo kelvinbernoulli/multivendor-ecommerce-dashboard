@@ -1,10 +1,11 @@
+import redisClient from "#config/redis.js";
 import pool from "#services/pg_pool.js";
 import { generateOTP } from "#utils/helpers.js";
-import { sendEmailVerificationOTP } from "./mail.model";
-import { select_by_keys } from "./query.model";
+import { sendEmailVerificationOTP } from "./mail.model.js";
+import { select_by_keys } from "./query.model.js";
 
 export class Auth {
-    static async activateAccount(email) {
+    static async activateAccount(email, vendorId = null) {
         try {
             const { code } = await generateOTP();
 
@@ -220,6 +221,38 @@ export class Auth {
             throw error;
         }
     }
+
+    //////////
+
+    static async refreshSession(session) {
+        return new Promise((resolve, reject) => {
+            // touch() resets the TTL in Redis without modifying session data
+            session.touch((err) => {
+                if (err) return reject(err);
+                resolve({ expiresAt: new Date(Date.now() + session.cookie.maxAge) });
+            });
+        });
+    };
+
+    static async logout(session) {
+        return new Promise((resolve, reject) => {
+            const userId = session.user?.id;
+
+            session.destroy(async (err) => {
+                if (err) return reject(err);
+
+                // Decrement session count — floor at 0
+                if (userId) {
+                    const count = parseInt(await redisClient.get(keys.sessionCount(userId)) || '0');
+                    if (count > 0) await redisClient.decr(keys.sessionCount(userId));
+                }
+
+                resolve();
+            });
+        });
+    };
+
+    
 }
 
 export default Auth;

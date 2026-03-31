@@ -5,9 +5,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-        "dev": "nodemon ./index.js",
-        "start": "nodemon ./index.js"
-    },
+    "dev": "nodemon ./index.js",
+    "start": "nodemon ./index.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kelvinbernoulli/ecommerce-dashboard-server.git"
@@ -22,34 +22,38 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1016.0",
     "@aws-sdk/lib-storage": "^3.1016.0",
+    "bcrypt": "^6.0.0",
     "body-parser": "^2.2.2",
+    "connect-redis": "^9.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
+    "express-validator": "^7.3.1",
     "helmet": "^8.1.0",
     "hi-base32": "^0.5.1",
     "joi": "^18.1.1",
-    "jsonwebtoken": "^9.0.3",
     "mime-types": "^3.0.2",
     "node": "^25.8.1",
     "nodemailer": "^8.0.3",
     "nodemon": "^3.1.14",
+    "passport": "^0.7.0",
     "path": "^0.12.7",
     "pg": "^8.20.0",
+    "redis": "^5.11.0",
     "ua-parser-js": "^2.0.9",
     "url": "^0.11.4"
   },
   "imports": {
-        "#config/*": "./src/config/*",
-        "#controllers/*": "./src/controllers/*",
-        "#emailTemplates/*": "./src/emailTemplates/*",
-        "#middleware/*": "./src/middlewares/*",
-        "#models/*": "./src/models/*",
-        "#routes/*": "./src/routes/*",
-        "#schemas/*": "./src/schemas/*",
-        "#services/*": "./src/services/*",
-        "#utils/*": "./src/utils/*"
-    }
+    "#config/*": "./src/config/*",
+    "#controllers/*": "./src/controllers/*",
+    "#emailTemplates/*": "./src/emailTemplates/*",
+    "#middlewares/*": "./src/middlewares/*",
+    "#models/*": "./src/models/*",
+    "#routes/*": "./src/routes/*",
+    "#schemas/*": "./src/schemas/*",
+    "#services/*": "./src/services/*",
+    "#utils/*": "./src/utils/*"
+  }
 }

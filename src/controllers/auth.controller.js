@@ -7,7 +7,7 @@ import { normalizePhone, passwordHash, validatePassword } from "#utils/helpers.j
 export const register = async (req, res) => {
     try {
         const { body } = req;
-        const { email, password, country_id, is_vendor = false } = body;
+        const { email, password, country_id, vendor_id } = body;
 
         const { error } = registerSchema.validate(body);
         if (error) {
@@ -18,24 +18,29 @@ export const register = async (req, res) => {
             return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const [emailExist, countryData] = await Promise.allSettled([
+        const [emailExist, countryData, vendorData] = await Promise.allSettled([
             UserModel.emailExists(email),
             UserModel.getCountryById(country_id),
+            vendor_id ? UserModel.getVendorById(vendor_id) : null
         ]);
 
         if (emailExist) {
-            return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.RESOURCE_ALREADY_EXISTS);
+            return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
         if (!countryData) {
             return respondWithError(res, 422, "Invalid country ID!", ERROR_CODES.VALIDATION_ERROR);
         }
 
+        if (vendor_id && !vendorData) {
+            return respondWithError(res, 422, "Invalid vendor ID!", ERROR_CODES.VALIDATION_ERROR);
+        }
+
         const phone = normalizePhone(phone, countryData.code);
 
         const phoneExist = await UserModel.phoneExists(phone);
         if (phoneExist) {
-            return respondWithError(res, 409, `Phone ${phone} already exists!`, ERROR_CODES.RESOURCE_ALREADY_EXISTS);
+            return respondWithError(res, 409, `Phone ${phone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
         const hashpassword = await passwordHash(password)
@@ -65,4 +70,25 @@ export const register = async (req, res) => {
         console.error("Error during user registration:", error);
         return respondWithError(res, 500, error.message || error, ERROR_CODES.INTERNAL_SERVER_ERROR);
     }
+};
+
+export const activateAccount = async (req, res) => {
+    try {
+        const { body } = req;
+        const { email, otp } = body;
+        const user = await UserModel.getUserByEmail(email, vendorId);
+        const verifyResult = await Auth.validateOTP(email, otp);
+
+        if (!verifyResult.success) {
+            return respondWithError(res, 400, verifyResult.message, ERROR_CODES.VALIDATION_ERROR);
+        }
+    } catch (error) {
+        console.error("Error during account activation:", error);
+        return respondWithError(res, 500, error.message || error, ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+};
+
+export default {
+    register,
+    activateAccount
 };

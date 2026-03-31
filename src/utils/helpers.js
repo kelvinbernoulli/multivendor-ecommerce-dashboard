@@ -2,7 +2,6 @@ import Crypto from 'crypto';
 import pkg from 'hi-base32';
 import bcrypt from "bcrypt";
 import { validationResult } from 'express-validator';
-import { getUserByUsername } from '#models/user.model.js';
 const { encode } = pkg;
 
 // generate otp code
@@ -101,29 +100,6 @@ export const validateRequest = (req, res, next) => {
     return next()
 };
 
-export const generateUsername = async (email) => {
-    const base = email.split("@")[0]
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, "_")
-        .replace(/_{2,}/g, "_")
-        .replace(/^_|_$/g, "");
-
-    const taken = await getUserByUsername(base);
-    if (!taken) return base;
-
-    let username;
-    let exists = true;
-
-    while (exists) {
-        const suffix = Crypto.randomInt(1000, 9999);
-        username = `${base}${suffix}`;
-        const user = await getUserByUsername(username);
-        exists = !!user;
-    }
-
-    return base ? base : username;
-};
-
 const dialCodes = {
     NG: "234",
     UG: "256",
@@ -171,6 +147,24 @@ export const normalizePhone = (phone, countryCode) => {
     return `${country}${cleaned}`;
 };
 
+export const getVendorId = async (user) => {
+    let vendorId;
+    if (user.vendor_id === null) {
+        vendorId = user.id;
+        return parseInt(vendorId);
+    } else if (user.vendor_id != null || user.vendor_id == !empty) {
+        vendorId = user.vendor_id;
+        return parseInt(vendorId);
+    } else {
+        throw new Error('Unauthorized!');
+    }
+}
+
+export const base64ImagePattern = /^data:image\/(png|jpeg|jpg|pdf);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+export const generateTicketNumber = () => {
+    return Math.floor(100000 + Math.random() * 999999999).toString();
+}
 export default {
     generateOTP,
     validatePassword,
@@ -181,6 +175,8 @@ export default {
     passwordHash,
     verifyPassword,
     validateRequest,
-    generateUsername,
-    normalizePhone
+    normalizePhone,
+    getVendorId,
+    base64ImagePattern,
+    generateTicketNumber
 };

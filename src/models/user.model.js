@@ -1,5 +1,5 @@
 import pool from "#services/pg_pool.js";
-import { select_column_by_key } from "./query.model";
+import { select_column_by_key } from "./query.model.js";
 
 export class UserModel {
     static async emailExists(email) {
@@ -14,6 +14,17 @@ export class UserModel {
     static async getUserByEmail(email) {
         const queryResult = await select_column_by_key("users", "*", "email", email);
         const user = queryResult.rows[0] ? queryResult.rows[0] : null;
+        if (user) {
+            return user;
+        } else {
+            return null;
+        }
+    };
+
+    static async getUserByEmailAndVendorId(email, vendorId) {
+        const queryResult = `SELECT * FROM users WHERE email = $1 AND vendor_id = $2`;
+        const result = await pool.query(queryResult, [email, vendorId]);
+        const user = result.rows[0] ? result.rows[0] : null;
         if (user) {
             return user;
         } else {
