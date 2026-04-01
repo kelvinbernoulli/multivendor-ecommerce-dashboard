@@ -1,8 +1,14 @@
-import { activateAccount, register } from "#controllers/auth.controller.js";
+import * as AuthController from "#controllers/auth.controller.js";
 import { Router } from "express";
 const router = Router();
 
-router.post("/register", register);
-router.post("/verify-email", activateAccount);
+router.post("/vendor/signup", AuthController.vendorSignup);
+router.post("/customer/signup", AuthController.customerSignup);
+router.post("/verify-email", AuthController.verifyEmail);
+router.post("/login", AuthController.signIn);
+router.post("/customer/login", AuthController.customerSignin);
+
+router.post("/password-reset/request", AuthController.requestPasswordReset);
+router.post("/password-reset/confirm", AuthController.confirmPasswordReset);
 
 export default router;

@@ -1,4 +1,4 @@
-import { registerOTP } from "#emailTemplates/account.activation.js";
+import { registerOTP } from "#templates/account.activation.js";
 import transporter from "#services/mail_transporter.js";
 
 export const sendEmailVerificationOTP = async (user, otp) => {

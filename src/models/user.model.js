@@ -1,5 +1,15 @@
 import pool from "#services/pg_pool.js";
 import { select_column_by_key } from "./query.model.js";
+import { config } from "dotenv";
+
+config();
+
+const ROLES = {
+    VENDOR: parseInt(process.env.VENDOR_ROLE_ID),
+    CUSTOMER: parseInt(process.env.CUSTOMER_ROLE_ID),
+    VENDOR_ADMIN: parseInt(process.env.VENDOR_ADMIN_ROLE_ID),
+    ADMIN: parseInt(process.env.ADMIN_ROLE_ID),
+};
 
 export class UserModel {
     static async emailExists(email) {
@@ -67,41 +77,73 @@ export class UserModel {
         }
     }
 
-    static async createUser(body) {
+    static async createUser(data) {
         const client = await pool.connect();
+
         try {
-            await client.query("BEGIN");
-            const keys = Object.keys(body);
-            const values = Object.values(body);
+            await client.query('BEGIN');
 
-            const insertUserQuery = `
-                INSERT INTO users 
-                    (${keys.join(", ")})
-                VALUES 
-                    (${values.map((_, index) => "$" + (index + 1)).join(", ")})
-                RETURNING *;
-            `;
+            const filtered = Object.fromEntries(
+                Object.entries(data).filter(([key]) => data.includes(key))
+            );
+            const columns = Object.keys(filtered);
+            const values = Object.values(filtered);
+            const placeholders = values.map((_, i) => `$${i + 1}`);
 
-            const userResult = await client.query(insertUserQuery, values);
-            if (userResult.rowCount === 0) throw new Error("Error while creating user.");
-            const userId = userResult.rows[0].id;
+            // 2. Insert user row
+            const { rows, rowCount } = await client.query(
+                `INSERT INTO users (${columns.join(', ')})
+                VALUES (${placeholders.join(', ')})
+                RETURNING *`,
+                values
+            );
 
-            await client.query(`INSERT INTO users_info (user_id) VALUES ($1)`, [userId]);
+            if (rowCount === 0) throw new Error('Failed to create user');
 
-            await client.query("COMMIT");
+            const user = rows[0];
+            const userId = user.id;
 
-            delete body.password;
+            // 3. Role-specific linked table inserts — same transaction
+            if (data.role === ROLES.VENDOR) {
+                await client.query(
+                    `INSERT INTO vendors (user_id) VALUES ($1)`,
+                    [userId]
+                );
+            } else if (data.role === ROLES.CUSTOMER) {
+                await client.query(
+                    `INSERT INTO vendor_users (user_id) VALUES ($1)`,
+                    [userId]
+                );
+                await client.query(
+                    `INSERT INTO users_info (user_id) VALUES ($1)`,
+                    [userId]
+                );
+            } else if (data.role === ROLES.VENDOR_ADMIN) {
+                await client.query(
+                    `INSERT INTO vendor_admins (user_id) VALUES ($1)`,
+                    [userId]
+                );
+            } else if (data.role === ROLES.ADMIN) {
+                await client.query(
+                    `INSERT INTO admins (user_id) VALUES ($1)`,
+                    [userId]
+                );
+            } else {
+                throw new Error(`Unrecognised role: ${data.role}`);
+            }
 
-            return { success: true };
+            await client.query('COMMIT');
 
-        } catch (error) {
-            await client.query("ROLLBACK");
-            console.error(error);
-            return { code: 500, message: error.message };
+            const { password_hash, ...safeUser } = user;
+            return safeUser;
+
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
         } finally {
             client.release();
         }
-    };
+    }
 }
 
 export default UserModel;

@@ -1,11 +1,73 @@
 import Auth from "#models/auth.model.js";
 import UserModel from "#models/user.model.js";
 import VendorModel from "#models/vendor.model.js";
-import { registerSchema } from "#schemas/auth.schema.js";
+import { loginSchema, registerSchema } from "#schemas/auth.schema.js";
 import ERROR_CODES from "#utils/error.codes.js";
-import { normalizePhone, passwordHash, validatePassword } from "#utils/helpers.js";
+import bcrypt from "bcrypt";
+import { normalizePhone, passwordHash, validatePassword, verifyPassword } from "#utils/helpers.js";
+import CustomerModel from "#models/customer.model.js";
+import { body } from "express-validator";
 
-export const register = async (req, res) => {
+export const vendorSignup = async (req, res) => {
+    try {
+        const { body } = req;
+
+        const { error } = registerSchema.validate(body);
+        if (error) {
+            return respondWithError(res, 422, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        const { email, password, country_id } = body;
+
+        if (!validatePassword(password)) {
+            return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        const [emailExist, countryData] = await Promise.allSettled([
+            UserModel.emailExists(email),
+            UserModel.getCountryById(country_id)
+        ]);
+
+        if (emailExist) {
+            return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
+        }
+
+        if (!countryData) {
+            return respondWithError(res, 422, "Invalid country ID!", ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        const phone = normalizePhone(phone, countryData.code);
+
+        const phoneExist = await UserModel.phoneExists(phone);
+        if (phoneExist) {
+            return respondWithError(res, 409, `Phone ${phone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
+        }
+
+        const hashpassword = await passwordHash(password)
+
+        const role = parseInt(3);
+
+        const newUser = {
+            ...body,
+            password: hashpassword,
+            role
+        };
+
+        const createUser = await UserModel.createUser(newUser);
+        if (!createUser.success) {
+            return respondWithError(res, 400, 'Failed to create user', ERROR_CODES.RESOURCE_CREATE_FAILED);
+        }
+        delete body.password;
+        await Auth.activateAccount(email);
+
+        return respondWithSuccess(res, 200, "Email Verification OTP sent, please check your email.", body);
+    } catch (error) {
+        console.error("Error during vendor registration:", error);
+        return respondWithError(res, 500, error.message || error, ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+};
+
+export const customerSignup = async (req, res) => {
     try {
         const { body } = req;
 
@@ -20,18 +82,14 @@ export const register = async (req, res) => {
             return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const [emailExist, vendorUser, countryData, vendorData] = await Promise.allSettled([
-            UserModel.emailExists(email),
+        const [duplicateEmail, countryData, vendorData] = await Promise.allSettled([
             VendorModel.emailExists(email, vendor_id),
             UserModel.getCountryById(country_id),
             vendor_id ? UserModel.getVendorById(vendor_id) : null
         ]);
 
-        if (emailExist) {
+        if (duplicateEmail) {
             return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
-        }
-        if (vendorUser) {
-            return respondWithError(res, 409, `Email ${email} already exists for another vendor!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
         if (!countryData) {
@@ -44,18 +102,14 @@ export const register = async (req, res) => {
 
         const phone = normalizePhone(phone, countryData.code);
 
-        const phoneExist = await UserModel.phoneExists(phone);
-        if (phoneExist) {
+        const duplicatePhone = await UserModel.phoneExists(phone);
+        if (duplicatePhone) {
             return respondWithError(res, 409, `Phone ${phone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
         const hashpassword = await passwordHash(password)
-        const ROLES = {
-            VENDOR: 3,
-            CUSTOMER: 4,
-        };
 
-        const role = is_vendor ? ROLES.VENDOR : ROLES.CUSTOMER;
+        const role = 4;
 
         const newUser = {
             ...body,
@@ -78,23 +132,241 @@ export const register = async (req, res) => {
     }
 };
 
-export const activateAccount = async (req, res) => {
+export const verifyEmail = async (req, res) => {
     try {
-        const { body } = req;
-        const { email, otp } = body;
-        const user = await UserModel.getUserByEmail(email, vendorId);
-        const verifyResult = await Auth.validateOTP(email, otp);
+        const { email, otp, vendorId } = req.body;
 
+        let user;
+
+        if (vendorId) {
+            // Confirm vendor exists and is active
+            const vendor = await VendorModel.getVendorByEmail(email);
+            if (!vendor) {
+                return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+            }
+
+            // vendor_admin or vendor user
+            user = await VendorModel.getVendorUserByEmail(email, vendorId);
+        } else {
+            // platform_admin or customer — no vendorId in request
+            user = await UserModel.getUserByEmail(email);
+        }
+
+        if (!user) {
+            return respondWithError(res, 404, 'User not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+        }
+
+        if (user.is_email_verified) {
+            return respondWithError(res, 409, 'Email is already verified', ERROR_CODES.ALREADY_VERIFIED);
+        }
+
+        const verifyResult = await Auth.validateOTP(user, 'email_verification', otp);
         if (!verifyResult.success) {
             return respondWithError(res, 400, verifyResult.message, ERROR_CODES.VALIDATION_ERROR);
         }
-    } catch (error) {
-        console.error("Error during account activation:", error);
-        return respondWithError(res, 500, error.message || error, ERROR_CODES.INTERNAL_SERVER_ERROR);
+
+        const encryptedCode = await bcrypt.hash(otp.toString(), 10);
+
+        const updateTokenQuery = `UPDATE users SET email_verified_token = $1, email_verified = $2 WHERE email = $3`;
+        await pool.query(updateTokenQuery, [encryptedCode, true, email]);
+
+        return respondWithSuccess(res, 200, 'Email verified successfully');
+    } catch (err) {
+        console.error('Error during email verification:', err);
+        return respondWithError(res, 500, err.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
     }
 };
 
+export const signIn = async (req, res) => {
+    try {
+        const { body } = req;
+        const { error } = loginSchema.validate(body, { abortEarly: false });
+        if (error) {
+            return respondWithError(res, 400, error.details.map((d) => d.message).join(', '), ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        const { email, password, vendor_id } = body;
+        let user;
+
+        if (vendor_id) {
+            const { rows: vendorRows } = await pool.query(
+                `SELECT id FROM vendors
+                WHERE id = $1 AND status = 'active' LIMIT 1`,
+                [vendor_id]
+            );
+            if (!vendorRows[0]) {
+                return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+            }
+
+            // Try vendor staff first (vendor_admin + vendor), then customer
+            user =
+                (await VendorModel.getVendorUserByEmail(email, vendor_id)) ??
+                (await CustomerModel.getCustomerByEmail(email, vendor_id));
+        } else {
+            // Platform admin only
+            user = await UserModel.getUserByEmail(email);
+        }
+
+        if (!user) {
+            return respondWithError(res, 404, 'User not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+        }
+
+        if (!user.email_verified) {
+            return respondWithError(res, 403, 'Email not verified', ERROR_CODES.EMAIL_NOT_VERIFIED);
+        }
+
+        if (user.status !== 'active') {
+            return respondWithError(res, 403, 'Account is not active', ERROR_CODES.ACCOUNT_INACTIVE);
+        }
+
+        const passwordValid = await verifyPassword(password, user.password);
+        if (!passwordValid) {
+            return respondWithError(res, 401, 'Invalid credentials', ERROR_CODES.INVALID_CREDENTIALS);
+        }
+
+        await new Promise((resolve, reject) => {
+            req.session.regenerate((err) => (err ? reject(err) : resolve()));
+        });
+
+        req.session.user = {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            status: user.status,
+            ...(vendor_id && { vendor_id }),
+        };
+
+    } catch (error) {
+        console.error(error);
+        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+};
+
+export const customerSignin = async (req, res) => {
+    try {
+        const { body } = req;
+        const { error } = loginSchema.validate(body, { abortEarly: false });
+        if (error) {
+            return respondWithError(res, 400, error.details.map((d) => d.message).join(', '), ERROR_CODES.VALIDATION_ERROR);
+        }
+
+        const { email, password, vendor_id } = body;
+
+        const { rows: vendorRows } = await pool.query(
+            `SELECT id FROM vendors
+                WHERE id = $1 AND status = 'active' LIMIT 1`,
+            [vendor_id]
+        );
+        if (!vendorRows[0]) {
+            return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+        }
+
+        const user = await CustomerModel.getCustomerByEmail(email, vendor_id);
+
+        if (!user) {
+            return respondWithError(res, 404, 'User not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+        }
+
+        if (!user.email_verified) {
+            return respondWithError(res, 403, 'Email not verified', ERROR_CODES.EMAIL_NOT_VERIFIED);
+        }
+
+        if (user.status !== 'active') {
+            return respondWithError(res, 403, 'Account is not active', ERROR_CODES.ACCOUNT_INACTIVE);
+        }
+
+        const passwordValid = await verifyPassword(password, user.password);
+        if (!passwordValid) {
+            return respondWithError(res, 401, 'Invalid credentials', ERROR_CODES.INVALID_CREDENTIALS);
+        }
+
+    } catch (error) {
+        console.error(error);
+        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+};
+
+export const signOut = async (req, res) => {
+    try {
+        await new Promise((resolve, reject) => {
+            req.session.destroy((err) => (err ? reject(err) : resolve()));
+        });
+
+        res.clearCookie('connect.sid');
+
+        return respondWithSuccess(res, 200, 'Logged out successfully');
+    } catch (error) {
+        console.error(error);
+        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+};
+
+export const requestPasswordReset = async (req, res) => {
+    try {
+        const { email, medium, vendor_id } = req.body;
+        let user;
+
+        if (vendor_id) {
+            const { rows: vendorRows } = await pool.query(
+                `SELECT id FROM vendors
+                WHERE id = $1 AND status = 'active' LIMIT 1`,
+                [vendor_id]
+            );
+            if (!vendorRows[0]) {
+                return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+            }
+            user = await VendorModel.getVendorUserByEmail(email, vendor_id);
+        } else {
+            user = await UserModel.getUserByEmail(email);
+        }
+
+        const sendToken = await Auth.sendOTP(user, medium, 'password_reset');
+        if (!sendToken.success) {
+            return respondWithError(res, 400, sendToken.message, ERROR_CODES.EMAIL_SEND_FAILED);
+        }
+        return respondWithSuccess(res, 200, `Password reset OTP sent via ${medium}. Please check your ${medium}.`);
+
+    } catch (error) {
+        console.error(error);
+        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+}
+
+export const confirmPasswordReset = async (req, res) => {
+    try {
+        const { email, otp, new_password, medium, vendor_id } = req.body;
+        let user;
+
+        if (vendor_id) {
+            const { rows: vendorRows } = await pool.query(
+                `SELECT id FROM vendors
+                WHERE id = $1 AND status = 'active' LIMIT 1`,
+                [vendor_id]
+            );
+            if (!vendorRows[0]) {
+                return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
+            }
+            user = await VendorModel.getVendorUserByEmail(email, vendor_id);
+        } else {
+            user = await UserModel.getUserByEmail(email);
+        }
+        const verifyResult = await Auth.validateOTP(user, medium, 'password_reset', otp);
+        if (!verifyResult.success) {
+            return respondWithError(res, 400, verifyResult.message, ERROR_CODES.VALIDATION_ERROR);
+        }
+
+    } catch (error) {
+        console.error(error);
+        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+}
+
 export default {
-    register,
-    activateAccount
+    vendorSignup,
+    customerSignup,
+    verifyEmail,
+    signIn,
+    signOut,
+    requestPasswordReset,
+    confirmPasswordReset
 };
