@@ -5,24 +5,24 @@ import { sendEmailVerificationOTP } from "./mail.model.js";
 import { select_by_keys } from "./query.model.js";
 
 export class Auth {
-    static async activateAccount(email, vendorId = null) {
+    static async activateAccount(email, userId, vendorId = null) {
         try {
             const { code } = await generateOTP();
 
             await pool.query(`
-                INSERT INTO otp (email, otp, otp_type, created_at, expires_at)
-                VALUES ($1, $2, 'email', NOW(), NOW() + INTERVAL '10 minutes')
-                ON CONFLICT (email, otp_type)
+                INSERT INTO otp (user_id, email, vendor_id, code, type, created_at, expires_at)
+                VALUES ($1, $2, $3, $4, 'email_verification', NOW(), NOW() + INTERVAL '5 minutes')
+                ON CONFLICT (email, vendor_id, type)
                 DO UPDATE SET
-                    otp = EXCLUDED.otp,
+                    code = EXCLUDED.code,
                     created_at = NOW(),
-                    expires_at = NOW() + INTERVAL '10 minutes';`,
-                [email, code]
+                    expires_at = NOW() + INTERVAL '5 minutes'`,
+                [userId, email, vendorId ?? null, code]
             );
 
             const { rows } = await pool.query(
-                `SELECT * FROM users WHERE email = $1 LIMIT 1`,
-                [email]
+                `SELECT * FROM users WHERE email = $1 AND ($2::bigint IS NULL OR vendor_id = $2) LIMIT 1`,
+                [email, vendorId ?? null]
             );
 
             if (!rows[0]) throw new Error(`User not found for email: ${email}`);

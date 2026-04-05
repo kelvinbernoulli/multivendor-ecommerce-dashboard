@@ -15,7 +15,7 @@ export const registerOTP = (user, otp) => {
                 <tr>
                 <td style="padding: 20px 30px;">
                     <p style="text-align: center; margin-bottom: 20px;">
-                    <img src="${IMG_URL}/verified.png" height="100" alt="Verify Account" />
+                    <img src="" height="100" alt="Verify Account" />
                     </p>
 
                     <p style="text-align: center; font-size: 15px; line-height: 1.6; color: #555;">

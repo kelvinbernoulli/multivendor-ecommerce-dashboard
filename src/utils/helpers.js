@@ -163,8 +163,11 @@ export const getVendorId = async (user) => {
 export const base64ImagePattern = /^data:image\/(png|jpeg|jpg|pdf);base64,[A-Za-z0-9+/]+={0,2}$/;
 
 export const generateTicketNumber = () => {
-    return Math.floor(100000 + Math.random() * 999999999).toString();
-}
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Crypto.randomBytes(4).toString('hex').toUpperCase();
+  return `TKT-${timestamp}${random}`;
+};
+
 export default {
     generateOTP,
     validatePassword,

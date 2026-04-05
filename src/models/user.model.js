@@ -11,6 +11,7 @@ const ROLES = {
     ADMIN: parseInt(process.env.ADMIN_ROLE_ID),
 };
 
+const TABLE_NAME = "users";
 export class UserModel {
     static async emailExists(email) {
         const data = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
@@ -31,16 +32,31 @@ export class UserModel {
         }
     };
 
-    static async getUserByEmailAndVendorId(email, vendorId) {
-        const queryResult = `SELECT * FROM users WHERE email = $1 AND vendor_id = $2`;
-        const result = await pool.query(queryResult, [email, vendorId]);
-        const user = result.rows[0] ? result.rows[0] : null;
-        if (user) {
-            return user;
-        } else {
-            return null;
-        }
-    };
+    static async getVendorByEmail(email) {
+        const { rows } = await pool.query(
+            `SELECT u.*, v.*
+            FROM users u
+            JOIN vendors v ON v.user_id = u.id
+            WHERE u.email = $1
+            AND u.role = $2
+            AND u.deleted_at IS NULL`,
+            [email, ROLES.VENDOR]
+        );
+        return rows[0] ?? null;
+    }
+
+    static async getVendorByPhone(phone) {
+        const { rows } = await pool.query(
+            `SELECT u.*, v.*
+            FROM users u
+            JOIN vendors v ON v.user_id = u.id
+            WHERE u.phone = $1
+            AND u.role = $2
+            AND u.deleted_at IS NULL`,
+            [phone, ROLES.VENDOR]
+        );
+        return rows[0] ?? null;
+    }
 
     static async getUserById(id) {
         const queryResult = await select_column_by_key("users", "*", "id", id);
@@ -77,57 +93,57 @@ export class UserModel {
         }
     }
 
-    static async createUser(data) {
+    static async createUser(data, vendorId = null) {
         const client = await pool.connect();
 
         try {
             await client.query('BEGIN');
 
-            const filtered = Object.fromEntries(
-                Object.entries(data).filter(([key]) => data.includes(key))
-            );
-            const columns = Object.keys(filtered);
-            const values = Object.values(filtered);
-            const placeholders = values.map((_, i) => `$${i + 1}`);
+            const requestBodyKeys = Object.keys(data);
+            const requestBodyValues = Object.values(data);
 
-            // 2. Insert user row
-            const { rows, rowCount } = await client.query(
-                `INSERT INTO users (${columns.join(', ')})
-                VALUES (${placeholders.join(', ')})
-                RETURNING *`,
-                values
-            );
+            const insertUserQuery = `
+                INSERT INTO users (${requestBodyKeys.join(', ')})
+                VALUES (${requestBodyValues.map((_, i) => `$${i + 1}`).join(', ')})
+                RETURNING *
+            `;
 
-            if (rowCount === 0) throw new Error('Failed to create user');
+            const userResult = await client.query(insertUserQuery, requestBodyValues);
+            if (userResult.rowCount === 0) throw new Error('Error while creating user.');
 
-            const user = rows[0];
+            const user = userResult.rows[0];
             const userId = user.id;
 
-            // 3. Role-specific linked table inserts — same transaction
             if (data.role === ROLES.VENDOR) {
                 await client.query(
                     `INSERT INTO vendors (user_id) VALUES ($1)`,
                     [userId]
                 );
+
             } else if (data.role === ROLES.CUSTOMER) {
+                if (!vendorId) throw new Error('vendorId is required for customer registration.');
                 await client.query(
-                    `INSERT INTO vendor_users (user_id) VALUES ($1)`,
-                    [userId]
+                    `INSERT INTO vendor_customers (user_id, vendor_id) VALUES ($1, $2)`,
+                    [userId, vendorId]
                 );
                 await client.query(
-                    `INSERT INTO users_info (user_id) VALUES ($1)`,
-                    [userId]
+                    `INSERT INTO users_info (user_id, vendor_id) VALUES ($1, $2)`,
+                    [userId, vendorId]
                 );
+
             } else if (data.role === ROLES.VENDOR_ADMIN) {
+                if (!vendorId) throw new Error('vendorId is required for vendor admin registration.');
                 await client.query(
-                    `INSERT INTO vendor_admins (user_id) VALUES ($1)`,
-                    [userId]
+                    `INSERT INTO vendor_admins (user_id, vendor_id) VALUES ($1, $2)`,
+                    [userId, vendorId]
                 );
+
             } else if (data.role === ROLES.ADMIN) {
                 await client.query(
                     `INSERT INTO admins (user_id) VALUES ($1)`,
                     [userId]
                 );
+
             } else {
                 throw new Error(`Unrecognised role: ${data.role}`);
             }

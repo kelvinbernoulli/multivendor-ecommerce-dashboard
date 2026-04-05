@@ -6,7 +6,7 @@ import ERROR_CODES from "#utils/error.codes.js";
 import bcrypt from "bcrypt";
 import { normalizePhone, passwordHash, validatePassword, verifyPassword } from "#utils/helpers.js";
 import CustomerModel from "#models/customer.model.js";
-import { body } from "express-validator";
+import { respondWithError, respondWithSuccess } from "#utils/response.js";
 
 export const vendorSignup = async (req, res) => {
     try {
@@ -17,30 +17,26 @@ export const vendorSignup = async (req, res) => {
             return respondWithError(res, 422, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const { email, password, country_id } = body;
+        const { email, password, country_id, phone } = body;
 
         if (!validatePassword(password)) {
             return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const [emailExist, countryData] = await Promise.allSettled([
-            UserModel.emailExists(email),
-            UserModel.getCountryById(country_id)
-        ]);
-
-        if (emailExist) {
+        const userData = await UserModel.getVendorByEmail(email);
+        if (userData) {
             return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
+        const countryData = await UserModel.getCountryById(country_id);
         if (!countryData) {
             return respondWithError(res, 422, "Invalid country ID!", ERROR_CODES.VALIDATION_ERROR);
         }
+        const normalizedphone = normalizePhone(phone, countryData.country_code);
 
-        const phone = normalizePhone(phone, countryData.code);
-
-        const phoneExist = await UserModel.phoneExists(phone);
-        if (phoneExist) {
-            return respondWithError(res, 409, `Phone ${phone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
+        const phoneData = await UserModel.getVendorByPhone(normalizedphone);
+        if (phoneData) {
+            return respondWithError(res, 409, `Phone ${normalizedphone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
         const hashpassword = await passwordHash(password)
@@ -50,15 +46,17 @@ export const vendorSignup = async (req, res) => {
         const newUser = {
             ...body,
             password: hashpassword,
+            phone: normalizedphone,
             role
         };
 
         const createUser = await UserModel.createUser(newUser);
-        if (!createUser.success) {
+        if (!createUser) {
             return respondWithError(res, 400, 'Failed to create user', ERROR_CODES.RESOURCE_CREATE_FAILED);
         }
         delete body.password;
-        await Auth.activateAccount(email);
+        console.log("Created userID:", createUser.id);
+        await Auth.activateAccount(email, createUser.id);
 
         return respondWithSuccess(res, 200, "Email Verification OTP sent, please check your email.", body);
     } catch (error) {
