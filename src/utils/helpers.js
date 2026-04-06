@@ -163,9 +163,18 @@ export const getVendorId = async (user) => {
 export const base64ImagePattern = /^data:image\/(png|jpeg|jpg|pdf);base64,[A-Za-z0-9+/]+={0,2}$/;
 
 export const generateTicketNumber = () => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Crypto.randomBytes(4).toString('hex').toUpperCase();
-  return `TKT-${timestamp}${random}`;
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Crypto.randomBytes(4).toString('hex').toUpperCase();
+    return `TKT-${timestamp}${random}`;
+};
+
+export const buildOtpKey = (email, type, vendorId = null, userId = null) => {
+    const parts = ['otp'];
+    if (vendorId) parts.push(vendorId);
+    if (userId) parts.push(userId);
+    parts.push(email.toLowerCase());
+    parts.push(type);
+    return parts.join(':');
 };
 
 export default {
@@ -181,5 +190,6 @@ export default {
     normalizePhone,
     getVendorId,
     base64ImagePattern,
-    generateTicketNumber
+    generateTicketNumber,
+    buildOtpKey,
 };

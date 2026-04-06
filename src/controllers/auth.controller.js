@@ -4,7 +4,7 @@ import VendorModel from "#models/vendor.model.js";
 import { loginSchema, registerSchema } from "#schemas/auth.schema.js";
 import ERROR_CODES from "#utils/error.codes.js";
 import bcrypt from "bcrypt";
-import { normalizePhone, passwordHash, validatePassword, verifyPassword } from "#utils/helpers.js";
+import { buildOtpKey, normalizePhone, passwordHash, validatePassword, verifyPassword } from "#utils/helpers.js";
 import CustomerModel from "#models/customer.model.js";
 import { respondWithError, respondWithSuccess } from "#utils/response.js";
 import redisClient from "#config/redis.js";
@@ -134,29 +134,37 @@ export const customerSignup = async (req, res) => {
 
 export const verifyEmail = async (req, res) => {
     try {
-        const { token, email, vendorId = null } = req.query;
+        const { token, userId, email, vendorId } = req.query;
 
-        const redisKey = `otp:${vendorId}:${email}:email_verification`;
+        const decryptedToken = decrypt(token);
+        const decryptedUserId = decrypt(userId);
+        const decryptedVendorId = vendorId ? decrypt(vendorId) : null;
+
+        const redisKey = buildOtpKey(email, 'email_verification', decryptedVendorId, decryptedUserId);
+
+        console.log('RETRIEVE KEY:', redisKey);
+
         const stored = await redisClient.get(redisKey);
+        console.log('Stored OTP:', stored);
+        console.log('Sent OTP:', decryptedToken);
 
         if (!stored) {
             return respondWithError(res, 400, 'Verification link expired', ERROR_CODES.OTP_EXPIRED);
         }
 
-        if (stored !== decrypt(token)) {
+        if (stored !== decryptedToken) {
             return respondWithError(res, 400, 'Invalid verification link', ERROR_CODES.OTP_INVALID);
         }
 
         await pool.query(
             `UPDATE users
-            SET email_verified = true,
-                email_verified_at = NOW(),
-                status = 'active'
-            WHERE email = $1 AND (vendor_id = $2 OR $2 IS NULL)`,
-            [email, vendorId ?? null]
+       SET email_verified = true,
+           email_verified_at = NOW(),
+           status = 'active'
+       WHERE id = $1`,
+            [decryptedUserId]
         );
 
-        // delete OTP from Redis — single use
         await redisClient.del(redisKey);
 
         return respondWithSuccess(res, 200, 'Email verified successfully');

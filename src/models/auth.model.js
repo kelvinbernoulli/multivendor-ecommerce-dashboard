@@ -1,7 +1,7 @@
 import redisClient from "#config/redis.js";
 import pool from "#services/pg_pool.js";
 import { encrypt } from "#utils/encryption.js";
-import { generateOTP } from "#utils/helpers.js";
+import { buildOtpKey, generateOTP } from "#utils/helpers.js";
 import { sendEmailVerificationLink } from "./mail.model.js";
 import { select_by_keys } from "./query.model.js";
 import { config } from "dotenv";
@@ -17,16 +17,13 @@ const ROLES = {
 
 export class Auth {
     static async activateAccount(userId, vendorId) {
-        const { rows } = await pool.query(`
-            SELECT u.id, u.email, u.role, u.email_verified,
-                v.id          AS vendor_id
+        const { rows } = await pool.query(
+            `SELECT u.id, u.email, u.role, u.email_verified
             FROM users u
-            LEFT JOIN vendors v ON v.id = u.vendor_id
             WHERE u.id = $1
-                AND (u.vendor_id = $2 OR $2 IS NULL)
-                AND u.deleted_at IS NULL
+            AND u.deleted_at IS NULL
             LIMIT 1`,
-            [userId, vendorId ?? null]
+            [userId]
         );
 
         const user = rows[0];
@@ -43,24 +40,30 @@ export class Auth {
 
         const { code } = await generateOTP();
         const encryptedCode = encrypt(code.toString());
-        const encryptedVendorId = encrypt(vendorId ? vendorId.toString() : 'null');
         const encryptedUserId = encrypt(userId.toString());
-        const redisKey = `otp:${vendorId}:${user.email}:email_verification`;
-        await redisClient.set(redisKey, code, { EX: 300 });
 
-        const baseUrl = user.role === ROLES.CUSTOMER
-            ? user.website_url
+        // Match buildOtpKey format: otp:{vendorId}:{userId}:{email}:{type}
+        const redisKey = buildOtpKey(user.email, 'email_verification', vendorId, userId);
+        await redisClient.set(redisKey, code.toString(), { EX: 300 });
+
+        const baseUrl = vendorId
+            ? await getVendorBaseUrl(vendorId)  // fetch vendor's website_url separately
             : process.env.DEV_URL;
-        const link = new URL('v1/auth/verify-email', baseUrl);
+
+        if (!baseUrl) throw new Error('Base URL is not defined');
+
+        const link = new URL('/v1/auth/verify-email', baseUrl);
         link.searchParams.set('token', encryptedCode);
         link.searchParams.set('email', user.email);
         link.searchParams.set('userId', encryptedUserId);
-        link.searchParams.set('vendorId', encryptedVendorId);
+
+        // Only append vendorId if present
+        if (vendorId) {
+            const encryptedVendorId = encrypt(vendorId.toString());
+            link.searchParams.set('vendorId', encryptedVendorId);
+        }
 
         const vendor = {
-            // shopName: user.shop_name,
-            // logoUrl: user.logo_url,
-            // websiteUrl: user.website_url,
             supportEmail: user.email,
         };
 
