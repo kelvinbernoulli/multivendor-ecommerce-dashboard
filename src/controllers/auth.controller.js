@@ -7,6 +7,9 @@ import bcrypt from "bcrypt";
 import { normalizePhone, passwordHash, validatePassword, verifyPassword } from "#utils/helpers.js";
 import CustomerModel from "#models/customer.model.js";
 import { respondWithError, respondWithSuccess } from "#utils/response.js";
+import redisClient from "#config/redis.js";
+import { decrypt } from "#utils/encryption.js";
+import pool from "#services/pg_pool.js";
 
 export const vendorSignup = async (req, res) => {
     try {
@@ -55,8 +58,7 @@ export const vendorSignup = async (req, res) => {
             return respondWithError(res, 400, 'Failed to create user', ERROR_CODES.RESOURCE_CREATE_FAILED);
         }
         delete body.password;
-        console.log("Created userID:", createUser.id);
-        await Auth.activateAccount(email, createUser.id);
+        await Auth.activateAccount(createUser.id);
 
         return respondWithSuccess(res, 200, "Email Verification OTP sent, please check your email.", body);
     } catch (error) {
@@ -132,45 +134,57 @@ export const customerSignup = async (req, res) => {
 
 export const verifyEmail = async (req, res) => {
     try {
-        const { email, otp, vendorId } = req.body;
+        const { token, email, vendorId = null } = req.query;
 
-        let user;
+        const redisKey = `otp:${vendorId}:${email}:email_verification`;
+        const stored = await redisClient.get(redisKey);
 
-        if (vendorId) {
-            // Confirm vendor exists and is active
-            const vendor = await VendorModel.getVendorByEmail(email);
-            if (!vendor) {
-                return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
-            }
-
-            // vendor_admin or vendor user
-            user = await VendorModel.getVendorUserByEmail(email, vendorId);
-        } else {
-            // platform_admin or customer — no vendorId in request
-            user = await UserModel.getUserByEmail(email);
+        if (!stored) {
+            return respondWithError(res, 400, 'Verification link expired', ERROR_CODES.OTP_EXPIRED);
         }
 
+        if (stored !== decrypt(token)) {
+            return respondWithError(res, 400, 'Invalid verification link', ERROR_CODES.OTP_INVALID);
+        }
+
+        await pool.query(
+            `UPDATE users
+            SET email_verified = true,
+                email_verified_at = NOW(),
+                status = 'active'
+            WHERE email = $1 AND (vendor_id = $2 OR $2 IS NULL)`,
+            [email, vendorId ?? null]
+        );
+
+        // delete OTP from Redis — single use
+        await redisClient.del(redisKey);
+
+        return respondWithSuccess(res, 200, 'Email verified successfully');
+    } catch (error) {
+        console.error('Error verifying email:', error);
+        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+    }
+};
+
+export const resendVerification = async (req, res) => {
+    try {
+        const { email, vendorId } = req.body;
+        let user;
+        if (vendorId) {
+            user = await VendorModel.getVendorUserByEmail(email, vendorId);
+        } else {
+            user = await UserModel.getUserByEmail(email);
+        }
         if (!user) {
             return respondWithError(res, 404, 'User not found', ERROR_CODES.RESOURCE_NOT_FOUND);
         }
-
-        if (user.is_email_verified) {
-            return respondWithError(res, 409, 'Email is already verified', ERROR_CODES.ALREADY_VERIFIED);
+        const resend = await Auth.activateAccount(user.id, vendorId);
+        if (!resend.success) {
+            return respondWithError(res, 400, resend.message, resend.code);
         }
-
-        const verifyResult = await Auth.validateOTP(user, 'email_verification', otp);
-        if (!verifyResult.success) {
-            return respondWithError(res, 400, verifyResult.message, ERROR_CODES.VALIDATION_ERROR);
-        }
-
-        const encryptedCode = await bcrypt.hash(otp.toString(), 10);
-
-        const updateTokenQuery = `UPDATE users SET email_verified_token = $1, email_verified = $2 WHERE email = $3`;
-        await pool.query(updateTokenQuery, [encryptedCode, true, email]);
-
-        return respondWithSuccess(res, 200, 'Email verified successfully');
+        return respondWithSuccess(res, 200, 'Verification link resent successfully');
     } catch (err) {
-        console.error('Error during email verification:', err);
+        console.error('Error resending verification link:', err);
         return respondWithError(res, 500, err.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
     }
 };

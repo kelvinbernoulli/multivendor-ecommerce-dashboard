@@ -23,13 +23,11 @@ export class UserModel {
     };
 
     static async getUserByEmail(email) {
-        const queryResult = await select_column_by_key("users", "*", "email", email);
-        const user = queryResult.rows[0] ? queryResult.rows[0] : null;
-        if (user) {
-            return user;
-        } else {
-            return null;
-        }
+        const queryText = `SELECT * FROM users WHERE email = $1 AND vendor_id IS NULL AND deleted_at IS NULL LIMIT 1`;
+        const queryValues = [email];
+        const queryResult = await pool.query(queryText, queryValues);
+        return queryResult.rows[0] ?? null;
+
     };
 
     static async getVendorByEmail(email) {
@@ -45,6 +43,19 @@ export class UserModel {
         return rows[0] ?? null;
     }
 
+    static async getCustomerByEmail(email) {
+        const { rows } = await pool.query(
+            `SELECT u.*, vc.*
+            FROM users u
+            JOIN vendor_customers vc ON vc.user_id = u.id
+            WHERE u.email = $1
+            AND u.role = $2
+            AND u.deleted_at IS NULL`,
+            [email, ROLES.CUSTOMER]
+        );
+        return rows[0] ?? null;
+    }
+
     static async getVendorByPhone(phone) {
         const { rows } = await pool.query(
             `SELECT u.*, v.*
@@ -54,6 +65,19 @@ export class UserModel {
             AND u.role = $2
             AND u.deleted_at IS NULL`,
             [phone, ROLES.VENDOR]
+        );
+        return rows[0] ?? null;
+    }
+
+    static async getCustomerByPhone(phone) {
+        const { rows } = await pool.query(
+            `SELECT u.*, vc.*
+            FROM users u
+            JOIN vendor_customers vc ON vc.user_id = u.id
+            WHERE u.phone = $1
+            AND u.role = $2
+            AND u.deleted_at IS NULL`,
+            [phone, ROLES.CUSTOMER]
         );
         return rows[0] ?? null;
     }

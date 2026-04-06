@@ -1,12 +1,12 @@
-import { registerOTP } from "#templates/account.activation.js";
+import { emailVerification } from "#templates/account.activation.js";
 import transporter from "#services/mail_transporter.js";
 
-export const sendEmailVerificationOTP = async (user, otp) => {
+export const sendEmailVerificationLink = async (user, verificationLink, vendor) => {
     let mailOptions = {
         from: process.env.EMAIL_USER,
         to: user.email,
-        subject: 'Account Verification OTP',
-        html: registerOTP(user, otp)
+        subject: 'Account Verification Link',
+        html: emailVerification(user, verificationLink, vendor)
     };
 
     try {
@@ -20,5 +20,5 @@ export const sendEmailVerificationOTP = async (user, otp) => {
 };
 
 export default {
-    sendEmailVerificationOTP,
+    sendEmailVerificationLink,
 };

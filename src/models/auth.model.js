@@ -1,38 +1,71 @@
 import redisClient from "#config/redis.js";
 import pool from "#services/pg_pool.js";
+import { encrypt } from "#utils/encryption.js";
 import { generateOTP } from "#utils/helpers.js";
-import { sendEmailVerificationOTP } from "./mail.model.js";
+import { sendEmailVerificationLink } from "./mail.model.js";
 import { select_by_keys } from "./query.model.js";
+import { config } from "dotenv";
+
+config();
+
+const ROLES = {
+    VENDOR: parseInt(process.env.VENDOR_ROLE_ID),
+    CUSTOMER: parseInt(process.env.CUSTOMER_ROLE_ID),
+    VENDOR_ADMIN: parseInt(process.env.VENDOR_ADMIN_ROLE_ID),
+    ADMIN: parseInt(process.env.ADMIN_ROLE_ID),
+};
 
 export class Auth {
-    static async activateAccount(email, userId, vendorId = null) {
-        try {
-            const { code } = await generateOTP();
+    static async activateAccount(userId, vendorId) {
+        const { rows } = await pool.query(`
+            SELECT u.id, u.email, u.role, u.email_verified,
+                v.id          AS vendor_id
+            FROM users u
+            LEFT JOIN vendors v ON v.id = u.vendor_id
+            WHERE u.id = $1
+                AND (u.vendor_id = $2 OR $2 IS NULL)
+                AND u.deleted_at IS NULL
+            LIMIT 1`,
+            [userId, vendorId ?? null]
+        );
 
-            await pool.query(`
-                INSERT INTO otp (user_id, email, vendor_id, code, type, created_at, expires_at)
-                VALUES ($1, $2, $3, $4, 'email_verification', NOW(), NOW() + INTERVAL '5 minutes')
-                ON CONFLICT (email, vendor_id, type)
-                DO UPDATE SET
-                    code = EXCLUDED.code,
-                    created_at = NOW(),
-                    expires_at = NOW() + INTERVAL '5 minutes'`,
-                [userId, email, vendorId ?? null, code]
-            );
+        const user = rows[0];
 
-            const { rows } = await pool.query(
-                `SELECT * FROM users WHERE email = $1 AND ($2::bigint IS NULL OR vendor_id = $2) LIMIT 1`,
-                [email, vendorId ?? null]
-            );
+        if (!user) throw Object.assign(
+            new Error('User not found'),
+            { status: 404, code: 'USER_NOT_FOUND' }
+        );
 
-            if (!rows[0]) throw new Error(`User not found for email: ${email}`);
+        if (user.email_verified) throw Object.assign(
+            new Error('Email is already verified'),
+            { status: 409, code: 'ALREADY_VERIFIED' }
+        );
 
-            await sendEmailVerificationOTP(rows[0], code);
+        const { code } = await generateOTP();
+        const encryptedCode = encrypt(code.toString());
+        const encryptedVendorId = encrypt(vendorId ? vendorId.toString() : 'null');
+        const encryptedUserId = encrypt(userId.toString());
+        const redisKey = `otp:${vendorId}:${user.email}:email_verification`;
+        await redisClient.set(redisKey, code, { EX: 300 });
 
-        } catch (err) {
-            console.error("Error during email verification token process:", err);
-            throw err;
-        }
+        const baseUrl = user.role === ROLES.CUSTOMER
+            ? user.website_url
+            : process.env.DEV_URL;
+        const link = new URL('v1/auth/verify-email', baseUrl);
+        link.searchParams.set('token', encryptedCode);
+        link.searchParams.set('email', user.email);
+        link.searchParams.set('userId', encryptedUserId);
+        link.searchParams.set('vendorId', encryptedVendorId);
+
+        const vendor = {
+            // shopName: user.shop_name,
+            // logoUrl: user.logo_url,
+            // websiteUrl: user.website_url,
+            supportEmail: user.email,
+        };
+
+        await sendEmailVerificationLink(user, link.toString(), vendor);
+        return { success: true, message: 'Verification email sent' };
     }
 
     static async sendOTP(user, medium, type) {

@@ -3,8 +3,7 @@ import pool from "#services/pg_pool.js";
 class VendorModel  {
     static async getVendorUserByEmail(email, vendor_id) {
         const { rows } = await pool.query(
-            `SELECT u.id, u.email, u.password, u.firstname, u.lastname,
-              u.role, u.status, u.email_verified, vu.vendor_id
+            `SELECT u.*, vu.vendor_id
        FROM users u
        INNER JOIN vendor_users vu ON vu.user_id = u.id
        WHERE u.email = $1 AND vu.vendor_id = $2

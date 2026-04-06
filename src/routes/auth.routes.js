@@ -4,7 +4,8 @@ const router = Router();
 
 router.post("/vendor/signup", AuthController.vendorSignup);
 router.post("/customer/signup", AuthController.customerSignup);
-router.post("/verify-email", AuthController.verifyEmail);
+router.get("/verify-email", AuthController.verifyEmail);
+router.post('/resend-verification', AuthController.resendVerification);
 router.post("/login", AuthController.signIn);
 router.post("/customer/login", AuthController.customerSignin);
 
