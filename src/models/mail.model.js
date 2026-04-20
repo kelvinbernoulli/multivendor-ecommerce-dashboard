@@ -1,11 +1,13 @@
 import { emailVerification } from "#templates/account.activation.js";
 import transporter from "#services/mail_transporter.js";
+import { resetPassword } from "#templates/reset.password.js";
+import { adminRegistration } from "#templates/admin.reg.js";
 
 export const sendEmailVerificationLink = async (user, verificationLink, vendor) => {
     let mailOptions = {
         from: process.env.EMAIL_USER,
         to: user.email,
-        subject: 'Account Verification Link',
+        subject: 'Email Verification',
         html: emailVerification(user, verificationLink, vendor)
     };
 
@@ -14,11 +16,49 @@ export const sendEmailVerificationLink = async (user, verificationLink, vendor) 
         console.log("info", info)
         return true;
     } catch (error) {
-        console.error('Error sending verification OTP:', error);
+        console.error('Error sending verification email:', error);
+        return false
+    }
+};
+
+export const sendPasswordResetLink = async (user, resetLink, vendor) => {
+    let mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: 'Password Reset',
+        html: resetPassword(user, resetLink, vendor)
+    };
+
+    try {
+        let info = await transporter.sendMail(mailOptions);
+        console.log("info", info)
+        return true;
+    } catch (error) {
+        console.error('Error sending password reset email:', error);
+        return false
+    }
+};
+
+export const sendAdminRegistrationEmail = async (user, data, vendor) => {
+    let mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: 'Admin Registration',
+        html: adminRegistration(user, data, vendor)
+    };
+
+    try {
+        let info = await transporter.sendMail(mailOptions);
+        console.log("info", info)
+        return true;
+    } catch (error) {
+        console.error('Error sending admin reg email:', error);
         return false
     }
 };
 
 export default {
     sendEmailVerificationLink,
+    sendAdminRegistrationEmail,
+    sendPasswordResetLink
 };

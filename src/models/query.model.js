@@ -85,7 +85,7 @@ export const fetch_one_by_key = async (tb_name, condition_key, condition_value) 
     }
 };
 
-export const fetch_all_by_key = async (tb_name, condition_key, condition_value, offset = 0, limit = 40) => {
+export const fetch_all_by_key = async (tb_name, condition_key, condition_value, offset = 0, limit = 20) => {
     try {
         const queryText = `SELECT * FROM ${tb_name} WHERE ${condition_key} = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`;
 
@@ -98,8 +98,30 @@ export const fetch_all_by_key = async (tb_name, condition_key, condition_value, 
 
 export const fetch_all_by_keys = async (tb_name, conditions, offset = 0, limit = 40) => {
     try {
-        const queryText = `SELECT * FROM ${tb_name} WHERE ${conditions.map((condition, index) => `${condition.key} = $${index + 1}`).join(' AND ')} LIMIT $${conditions.length + 2} OFFSET $${conditions.length + 1}`;
-        const queryValues = [...conditions.map(condition => condition.value), offset, limit];
+        if (!Array.isArray(conditions) || conditions.length === 0) {
+            return Promise.reject(new Error('conditions must be a non-empty array'));
+        }
+
+        let paramIndex = 1;
+        const queryConditions = conditions.map((condition) => {
+            if (condition.value === null) {
+                return `${condition.key} IS NULL`;
+            }
+            return `${condition.key} = $${paramIndex++}`;
+        });
+
+        const queryValues = conditions
+            .filter(c => c.value !== null)
+            .map(c => c.value);
+
+        const queryText = `
+            SELECT * FROM ${tb_name} 
+            WHERE ${queryConditions.join(' AND ')} 
+            LIMIT $${paramIndex} 
+            OFFSET $${paramIndex + 1}
+        `;
+
+        queryValues.push(limit, offset);
 
         return await pool.query(queryText, queryValues);
     } catch (error) {

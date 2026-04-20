@@ -25,6 +25,7 @@ export const registerSchema = Joi.object({
                 "Phone must be a valid international number format.",
         }),
     country_id: Joi.number().integer().positive().required().label("Country ID"),
+    vendor_id: Joi.number().integer().positive().optional().label("Vendor ID"),
 });
 
 export const loginSchema = Joi.object({
@@ -35,5 +36,5 @@ export const loginSchema = Joi.object({
 
 export default {
     registerSchema,
-    loginSchema,
+    loginSchema
 };

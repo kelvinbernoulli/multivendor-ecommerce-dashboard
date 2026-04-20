@@ -168,7 +168,7 @@ export const generateTicketNumber = () => {
     return `TKT-${timestamp}${random}`;
 };
 
-export const buildOtpKey = (email, type, vendorId = null, userId = null) => {
+export const buildRedisKey = (email, type, vendorId = null, userId = null) => {
     const parts = ['otp'];
     if (vendorId) parts.push(vendorId);
     if (userId) parts.push(userId);
@@ -176,6 +176,23 @@ export const buildOtpKey = (email, type, vendorId = null, userId = null) => {
     parts.push(type);
     return parts.join(':');
 };
+
+export const ROLES = {
+    VENDOR: parseInt(process.env.VENDOR_ROLE_ID),
+    CUSTOMER: parseInt(process.env.CUSTOMER_ROLE_ID),
+    VENDOR_ADMIN: parseInt(process.env.VENDOR_ADMIN_ROLE_ID),
+    ADMIN: parseInt(process.env.ADMIN_ROLE_ID),
+    SUPER_ADMIN: parseInt(process.env.SUPER_ADMIN_ROLE_ID)
+};
+
+export const adminDefaultPassword = () => {
+    const characters = '0123456789';
+    let adminDefaultPassword = 'Admin@';
+    for (let i = 0; i < 6; i++) {
+        adminDefaultPassword += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return adminDefaultPassword;
+}
 
 export default {
     generateOTP,
@@ -191,5 +208,7 @@ export default {
     getVendorId,
     base64ImagePattern,
     generateTicketNumber,
-    buildOtpKey,
+    buildRedisKey,
+    ROLES,
+    adminDefaultPassword
 };

@@ -6,7 +6,8 @@ import { respondWithError, respondWithSuccess } from "#utils/response.js";
 
 export const createCategory = async (req, res) => {
     try {
-        const { user, body } = req;
+        const { session, body } = req;
+        const user = session?.user;
         const { error } = createCategorySchema.validate(body);
         if (error) {
             return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
@@ -55,7 +56,8 @@ export const updateCategory = async (req, res) => {
 
 export const fetchVendorCategories = async (req, res) => {
     try {
-        const { user, pagination } = req;
+        const { session, pagination } = req;
+        const user = session?.user;
         const { limit, offset } = pagination;
         const vendorId = await getVendorId(user);
         const result = Category.fetchByVendorId(vendorId, { limit, offset });
@@ -84,7 +86,8 @@ export const fetchCategoryById = async (req, res) => {
 
 export const deleteCategory = async (req, res) => {
     try {
-        const { user, params } = req;
+        const { session, params } = req;
+        const user = session?.user;
         const { categoryId } = params;
         const vendorId = await getVendorId(user);
         const result = Category.delete(categoryId, vendorId);

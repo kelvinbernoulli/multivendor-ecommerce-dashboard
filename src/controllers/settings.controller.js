@@ -8,7 +8,8 @@ import { respondWithError, respondWithSuccess } from "#utils/response.js";
 
 export const upsertSettings = async (req, res) => {
     try {
-        const { body, user } = req;
+        const { body, session } = req;
+        const user = session?.user;
         const vendorId = await getVendorId(user);
         const { error } = settingsSchema.validate(body);
         if (error) {
@@ -43,7 +44,8 @@ export const upsertSettings = async (req, res) => {
 
 export const fetchSettings = async (req, res) => {
     try {
-        const { user } = req;
+        const { session } = req;
+        const user = session?.user;
         const vendorId = await getVendorId(user);
         const result = await Settings.fetch(vendorId);
         return respondWithSuccess(res, 200, 'Settings fetched successfully', result.rows[0]);
@@ -55,7 +57,8 @@ export const fetchSettings = async (req, res) => {
 
 export const upsertGeneralSettings = async (req, res) => {
     try {
-        const { body, user } = req;
+        const { body, session } = req;
+        const user = session?.user;
         const { error } = settingsSchema.validate(body);
         if (error) {
             return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);

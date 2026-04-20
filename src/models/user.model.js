@@ -1,17 +1,12 @@
 import pool from "#services/pg_pool.js";
+import { ROLES } from "#utils/helpers.js";
 import { select_column_by_key } from "./query.model.js";
 import { config } from "dotenv";
 
 config();
 
-const ROLES = {
-    VENDOR: parseInt(process.env.VENDOR_ROLE_ID),
-    CUSTOMER: parseInt(process.env.CUSTOMER_ROLE_ID),
-    VENDOR_ADMIN: parseInt(process.env.VENDOR_ADMIN_ROLE_ID),
-    ADMIN: parseInt(process.env.ADMIN_ROLE_ID),
-};
-
 const TABLE_NAME = "users";
+
 export class UserModel {
     static async emailExists(email) {
         const data = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
@@ -27,60 +22,35 @@ export class UserModel {
         const queryValues = [email];
         const queryResult = await pool.query(queryText, queryValues);
         return queryResult.rows[0] ?? null;
-
     };
 
-    static async getVendorByEmail(email) {
-        const { rows } = await pool.query(
-            `SELECT u.*, v.*
-            FROM users u
-            JOIN vendors v ON v.user_id = u.id
-            WHERE u.email = $1
-            AND u.role = $2
-            AND u.deleted_at IS NULL`,
-            [email, ROLES.VENDOR]
-        );
-        return rows[0] ?? null;
-    }
+    static async getUserByPhone(phone) {
+        const queryText = `SELECT * FROM users WHERE phone = $1 AND vendor_id IS NULL AND deleted_at IS NULL LIMIT 1`;
+        const queryValues = [phone];
+        const queryResult = await pool.query(queryText, queryValues);
+        return queryResult.rows[0] ?? null;
+    };
 
-    static async getCustomerByEmail(email) {
-        const { rows } = await pool.query(
-            `SELECT u.*, vc.*
-            FROM users u
-            JOIN vendor_customers vc ON vc.user_id = u.id
-            WHERE u.email = $1
-            AND u.role = $2
-            AND u.deleted_at IS NULL`,
-            [email, ROLES.CUSTOMER]
-        );
-        return rows[0] ?? null;
-    }
+    static async getUserByEmailAndRole(email, role) {
+        const queryText = `SELECT * FROM users WHERE email = $1 AND role = ANY($2) AND vendor_id IS NULL AND deleted_at IS NULL LIMIT 1`;
+        const queryValues = [email, role];
+        const queryResult = await pool.query(queryText, queryValues);
+        return queryResult.rows[0] ?? null;
+    };
 
-    static async getVendorByPhone(phone) {
-        const { rows } = await pool.query(
-            `SELECT u.*, v.*
-            FROM users u
-            JOIN vendors v ON v.user_id = u.id
-            WHERE u.phone = $1
-            AND u.role = $2
-            AND u.deleted_at IS NULL`,
-            [phone, ROLES.VENDOR]
-        );
-        return rows[0] ?? null;
-    }
+    static async getAdminUserByPhone(phone) {
+        const queryText = `SELECT * FROM users WHERE phone = $1 AND vendor_id IS NULL AND deleted_at IS NULL LIMIT 1`;
+        const queryValues = [phone];
+        const queryResult = await pool.query(queryText, queryValues);
+        return queryResult.rows[0] ?? null;
+    };
 
-    static async getCustomerByPhone(phone) {
-        const { rows } = await pool.query(
-            `SELECT u.*, vc.*
-            FROM users u
-            JOIN vendor_customers vc ON vc.user_id = u.id
-            WHERE u.phone = $1
-            AND u.role = $2
-            AND u.deleted_at IS NULL`,
-            [phone, ROLES.CUSTOMER]
-        );
-        return rows[0] ?? null;
-    }
+    static async getAdminUserById(id) {
+        const queryText = `SELECT * FROM users WHERE id = $1 AND vendor_id IS NULL AND deleted_at IS NULL LIMIT 1`;
+        const queryValues = [id];
+        const queryResult = await pool.query(queryText, queryValues);
+        return queryResult.rows[0] ?? null;
+    };
 
     static async getUserById(id) {
         const queryResult = await select_column_by_key("users", "*", "id", id);
@@ -118,6 +88,7 @@ export class UserModel {
     }
 
     static async createUser(data, vendorId = null) {
+        console.log("data:", data, "vendorId:", vendorId)
         const client = await pool.connect();
 
         try {
@@ -137,6 +108,7 @@ export class UserModel {
 
             const user = userResult.rows[0];
             const userId = user.id;
+            console.log('Created user with ID:', userId);
 
             if (data.role === ROLES.VENDOR) {
                 await client.query(
@@ -146,10 +118,7 @@ export class UserModel {
 
             } else if (data.role === ROLES.CUSTOMER) {
                 if (!vendorId) throw new Error('vendorId is required for customer registration.');
-                await client.query(
-                    `INSERT INTO vendor_customers (user_id, vendor_id) VALUES ($1, $2)`,
-                    [userId, vendorId]
-                );
+                
                 await client.query(
                     `INSERT INTO users_info (user_id, vendor_id) VALUES ($1, $2)`,
                     [userId, vendorId]
@@ -158,7 +127,7 @@ export class UserModel {
             } else if (data.role === ROLES.VENDOR_ADMIN) {
                 if (!vendorId) throw new Error('vendorId is required for vendor admin registration.');
                 await client.query(
-                    `INSERT INTO vendor_admins (user_id, vendor_id) VALUES ($1, $2)`,
+                    `INSERT INTO admins (user_id, vendor_id) VALUES ($1, $2)`,
                     [userId, vendorId]
                 );
 
@@ -167,6 +136,7 @@ export class UserModel {
                     `INSERT INTO admins (user_id) VALUES ($1)`,
                     [userId]
                 );
+                // await 
 
             } else {
                 throw new Error(`Unrecognised role: ${data.role}`);
@@ -183,6 +153,28 @@ export class UserModel {
         } finally {
             client.release();
         }
+    }
+
+    static async updateAdmin(id, data) {
+        const setClauses = [];
+        const values = [];
+        let i = 1;
+        for (const [key, value] of Object.entries(data)) {
+            setClauses.push(`${key} = $${i}`);
+            values.push(value);
+            i++;
+        }
+        values.push(id);
+
+        const query = `
+            UPDATE users
+            SET ${setClauses.join(', ')}
+            WHERE id = $${i} AND vendor_id IS NULL AND deleted_at IS NULL
+            RETURNING *
+        `;
+        const result = await pool.query(query, values);
+        return result.rows[0] ?? null;
+
     }
 }
 

@@ -1,19 +1,14 @@
 import redisClient from "#config/redis.js";
 import pool from "#services/pg_pool.js";
 import { encrypt } from "#utils/encryption.js";
-import { buildOtpKey, generateOTP } from "#utils/helpers.js";
-import { sendEmailVerificationLink } from "./mail.model.js";
+import { buildRedisKey, generateOTP, ROLES } from "#utils/helpers.js";
+import { sendAdminRegistrationEmail, sendEmailVerificationLink, sendPasswordResetLink } from "./mail.model.js";
 import { select_by_keys } from "./query.model.js";
 import { config } from "dotenv";
 
 config();
 
-const ROLES = {
-    VENDOR: parseInt(process.env.VENDOR_ROLE_ID),
-    CUSTOMER: parseInt(process.env.CUSTOMER_ROLE_ID),
-    VENDOR_ADMIN: parseInt(process.env.VENDOR_ADMIN_ROLE_ID),
-    ADMIN: parseInt(process.env.ADMIN_ROLE_ID),
-};
+
 
 export class Auth {
     static async activateAccount(userId, vendorId) {
@@ -42,8 +37,8 @@ export class Auth {
         const encryptedCode = encrypt(code.toString());
         const encryptedUserId = encrypt(userId.toString());
 
-        // Match buildOtpKey format: otp:{vendorId}:{userId}:{email}:{type}
-        const redisKey = buildOtpKey(user.email, 'email_verification', vendorId, userId);
+        // Match buildRedisKey format
+        const redisKey = buildRedisKey(user.email, 'email_verification', vendorId, userId);
         await redisClient.set(redisKey, code.toString(), { EX: 300 });
 
         const baseUrl = vendorId
@@ -66,9 +61,59 @@ export class Auth {
         const vendor = {
             supportEmail: user.email,
         };
-
+        
         await sendEmailVerificationLink(user, link.toString(), vendor);
         return { success: true, message: 'Verification email sent' };
+    }
+
+    static async forgotPassword(userId, vendorId) {
+        const { rows } = await pool.query(
+            `SELECT u.id, u.email, u.role, u.email_verified
+            FROM users u
+            WHERE u.id = $1
+            AND u.deleted_at IS NULL
+            LIMIT 1`,
+            [userId]
+        );
+
+        const user = rows[0];
+
+        if (!user) throw Object.assign(
+            new Error('User not found'),
+            { status: 404, code: 'USER_NOT_FOUND' }
+        );
+
+        const { code } = await generateOTP();
+        const encryptedCode = encrypt(code.toString());
+        const encryptedUserId = encrypt(userId.toString());
+
+        // Match buildRedisKey format
+        const redisKey = buildRedisKey(user.email, 'password_reset ', vendorId, userId);
+        await redisClient.set(redisKey, code.toString(), { EX: 300 });
+
+        const baseUrl = vendorId
+            ? await getVendorBaseUrl(vendorId)  // fetch vendor's website_url separately
+            : process.env.DEV_URL;
+
+        if (!baseUrl) throw new Error('Base URL is not defined');
+
+        const link = new URL('/v1/auth/password-reset/confirm', baseUrl);
+        link.searchParams.set('token', encryptedCode);
+        link.searchParams.set('email', user.email);
+        link.searchParams.set('userId', encryptedUserId);
+
+        // Only append vendorId if present
+        if (vendorId) {
+            const encryptedVendorId = encrypt(vendorId.toString());
+            link.searchParams.set('vendorId', encryptedVendorId);
+        }
+
+        const vendor = {
+            supportEmail: user.email,
+        };
+
+        await sendPasswordResetLink(user, link.toString(), vendor);
+        return { success: true, message: 'Password reset email sent' };
     }
 
     static async sendOTP(user, medium, type) {
@@ -258,11 +303,8 @@ export class Auth {
         }
     }
 
-    //////////
-
     static async refreshSession(session) {
         return new Promise((resolve, reject) => {
-            // touch() resets the TTL in Redis without modifying session data
             session.touch((err) => {
                 if (err) return reject(err);
                 resolve({ expiresAt: new Date(Date.now() + session.cookie.maxAge) });
@@ -287,7 +329,6 @@ export class Auth {
             });
         });
     };
-
 
 }
 

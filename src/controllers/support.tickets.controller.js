@@ -6,7 +6,8 @@ import { respondWithError, respondWithSuccess } from "#utils/response.js";
 
 export const createSupportTicket = async (req, res) => {
     try {
-        const { user, body } = req;
+        const { session, body } = req;
+        const user = session?.user;
         const { error } = supportTicketSchema.validate(body);
         if (error) {
             return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
@@ -27,7 +28,8 @@ export const createSupportTicket = async (req, res) => {
 
 export const createGeneralSupportTicket = async (req, res) => {
     try {
-        const { user, body } = req;
+        const { session, body } = req;
+        const user = session?.user;
         const { error } = supportTicketSchema.validate(body);
         if (error) {
             return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
@@ -47,7 +49,8 @@ export const createGeneralSupportTicket = async (req, res) => {
 
 export const fetchVendorSupportTickets = async (req, res) => {
     try {
-        const { user, pagination, query } = req;
+        const { session, pagination, query } = req;
+        const user = session?.user;
         const { offset, limit } = pagination;
         const vendorId = await getVendorId(user);
         const result = await SupportTicket.fetchVendorTickets(vendorId, { pagination, query });
@@ -63,7 +66,8 @@ export const fetchVendorSupportTickets = async (req, res) => {
 
 export const fetchGeneralSupportTickets = async (req, res) => {
     try {
-        const { user, pagination, query } = req;
+        const { session, pagination, query } = req;
+        const user = session?.user;
         const { offset, limit } = pagination;
         const result = await SupportTicket.fetchGeneralUserTickets({ offset, limit, query });
         if (result.rowCount === 0) {
@@ -78,7 +82,8 @@ export const fetchGeneralSupportTickets = async (req, res) => {
 
 export const fetchSupportTicketById = async (req, res) => {
     try {
-        const { user, params } = req;
+        const { session, params } = req;
+        const user = session?.user;
         const { ticketId } = params;
         const vendorId = await getVendorId(user);
         const result = await SupportTicket.fetchTicketById(vendorId, ticketId);
@@ -94,7 +99,8 @@ export const fetchSupportTicketById = async (req, res) => {
 
 export const fetchGeneralSupportTicketById = async (req, res) => {
     try {
-        const { user, params } = req;
+        const { session, params } = req;
+        const user = session?.user;
         const { ticketId } = params;
         const result = await SupportTicket.fetchGeneralTicketById(ticketId);
         if (result.rowCount === 0) {
@@ -109,7 +115,8 @@ export const fetchGeneralSupportTicketById = async (req, res) => {
 
 export const deleteSupportTicket = async (req, res) => {
     try {
-        const { user, params } = req;
+        const { session, params } = req;
+        const user = session?.user;
         const { ticketId } = params;
         const vendorId = await getVendorId(user);
         const result = await SupportTicket.deleteVendorTicket(vendorId, ticketId);

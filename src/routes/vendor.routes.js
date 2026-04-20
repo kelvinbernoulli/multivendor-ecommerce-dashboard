@@ -4,30 +4,31 @@ import * as SettingsController from "#controllers/settings.controller.js";
 import * as SupportTicketController from "#controllers/support.tickets.controller.js";
 import pagination from "#middlewares/pagination.middleware.js";
 import { Router } from "express";
+import { authenticated } from "#middlewares/authenticate.middleware.js";
 const router = Router();
 
 //categories
-router.post("/category/create", CategoriesController.createCategory);
-router.get("/categories", pagination, CategoriesController.fetchVendorCategories);
-router.get("/category/:id", CategoriesController.fetchCategoryById);
-router.patch("/category/update/:categoryId", CategoriesController.updateCategory);
-router.delete("/category/delete/:categoryId", CategoriesController.deleteCategory);
+router.post("/category/create", authenticated, CategoriesController.createCategory);
+router.get("/categories", pagination, authenticated, CategoriesController.fetchVendorCategories);
+router.get("/category/:id", authenticated, CategoriesController.fetchCategoryById);
+router.patch("/category/update/:categoryId", authenticated, CategoriesController.updateCategory);
+router.delete("/category/delete/:categoryId", authenticated, CategoriesController.deleteCategory);
 
 //subcategories
-router.post("/subcategory/create", SubcategoriesController.createSubcategory);
-router.get("/subcategories", pagination, SubcategoriesController.fetchVendorSubcategories);
-router.get("/subcategory/:id", SubcategoriesController.fetchSubcategoryById);
-router.patch("/subcategory/update/:subcategoryId", SubcategoriesController.updateSubcategory);
-router.delete("/subcategory/delete/:subcategoryId", SubcategoriesController.deleteSubcategory);
+router.post("/subcategory/create", authenticated, SubcategoriesController.createSubcategory);
+router.get("/subcategories", pagination, authenticated, SubcategoriesController.fetchVendorSubcategories);
+router.get("/subcategory/:id", authenticated, SubcategoriesController.fetchSubcategoryById);
+router.patch("/subcategory/update/:subcategoryId", authenticated, SubcategoriesController.updateSubcategory);
+router.delete("/subcategory/delete/:subcategoryId", authenticated, SubcategoriesController.deleteSubcategory);
 
 //settings
-router.get("/settings", pagination, SettingsController.fetchVendorSubcategories);
-router.patch("/settings/update", SettingsController.updateSubcategory);
+router.get("/settings", pagination, authenticated, SettingsController.fetchVendorSubcategories);
+router.patch("/settings/update", authenticated, SettingsController.updateSubcategory);
 
 //support tickets
-router.post("/support-tickets/create", SupportTicketController.createSupportTicket);
-router.get("/support-tickets", pagination, SupportTicketController.fetchVendorSupportTickets);
-router.get("/support-tickets/:ticketId", SupportTicketController.fetchSupportTicketById);
-router.delete("/support-tickets/:ticketId", SupportTicketController.deleteSupportTicket);
+router.post("/support-tickets/create", authenticated, SupportTicketController.createSupportTicket);
+router.get("/support-tickets", pagination, authenticated, SupportTicketController.fetchVendorSupportTickets);
+router.get("/support-tickets/:ticketId", authenticated, SupportTicketController.fetchSupportTicketById);
+router.delete("/support-tickets/:ticketId", authenticated, SupportTicketController.deleteSupportTicket);
 
 export default router;

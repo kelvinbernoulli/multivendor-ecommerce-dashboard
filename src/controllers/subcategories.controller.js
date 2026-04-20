@@ -6,7 +6,8 @@ import { respondWithError } from "#utils/response.js";
 
 export const createSubcategory = async (req, res) => {
     try {
-        const { body, user } = req;
+        const { body, session } = req;
+        const user = session?.user;
         const { error } = createSubcategorySchema.validate(body);
         if (error) {
             return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
@@ -30,7 +31,8 @@ export const createSubcategory = async (req, res) => {
 
 export const updateSubcategory = async (req, res) => {
     try {
-        const { user, body, params } = req;
+        const { session, body, params } = req;
+        const user = session?.user;
         const { subcategoryId } = params;
         const vendorId = await getVendorId(user);
         const { error } = updateSubcategorySchema.validate(body);
@@ -55,7 +57,8 @@ export const updateSubcategory = async (req, res) => {
 
 export const fetchVendorSubcategories = async (req, res) => {
     try {
-        const { user, pagination } = req;
+        const { session, pagination } = req;
+        const user = session?.user;
         const { limit, offset } = pagination;
         const vendorId = await getVendorId(user);
         const result = Subcategory.fetchByVendorId(vendorId, { limit, offset });
@@ -68,7 +71,8 @@ export const fetchVendorSubcategories = async (req, res) => {
 
 export const fetchSubcategoryById = async (req, res) => {
     try {
-        const { user, params } = req;
+        const { session, params } = req;
+        const user = session?.user;
         const { subcategoryId } = params;
         const vendorId = await getVendorId(user);
         const result = Subcategory.fetchById(subcategoryId, vendorId);
@@ -84,7 +88,8 @@ export const fetchSubcategoryById = async (req, res) => {
 
 export const deleteSubcategory = async (req, res) => {
     try {
-        const { user, params } = req;
+        const { session, params } = req;
+        const user = session?.user;
         const { subcategoryId } = params;
         const vendorId = await getVendorId(user);
         const result = Subcategory.delete(subcategoryId, vendorId);
