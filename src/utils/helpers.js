@@ -194,6 +194,10 @@ export const adminDefaultPassword = () => {
     return adminDefaultPassword;
 }
 
+export const generateOrderReference = (orderId) => {
+    return `ORD-${orderId}-${Date.now()}`;
+};
+
 export default {
     generateOTP,
     validatePassword,
@@ -209,6 +213,7 @@ export default {
     base64ImagePattern,
     generateTicketNumber,
     buildRedisKey,
+    generateOrderReference,
     ROLES,
     adminDefaultPassword
 };

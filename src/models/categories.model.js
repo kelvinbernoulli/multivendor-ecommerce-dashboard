@@ -1,6 +1,6 @@
 import pool from '#services/pg_pool.js';
 
-class Category {
+export class Category {
 
     static async create({ category_name, description, category_image, vendor_id }) {
         const result = await pool.query(`

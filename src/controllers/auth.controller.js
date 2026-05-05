@@ -25,7 +25,7 @@ export const vendorSignup = async (req, res) => {
             return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const userData = await UserModel.getVendorByEmail(email);
+        const userData = await VendorModel.getVendorByEmail(email);
         if (userData) {
             return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
@@ -36,7 +36,7 @@ export const vendorSignup = async (req, res) => {
         }
         const normalizedphone = normalizePhone(phone, countryData.country_code);
 
-        const phoneData = await UserModel.getVendorByPhone(normalizedphone);
+        const phoneData = await VendorModel.getVendorByPhone(normalizedphone);
         if (phoneData) {
             return respondWithError(res, 409, `Phone ${normalizedphone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
@@ -260,7 +260,7 @@ export const adminSignIn = async (req, res) => {
             }
             user = await VendorModel.getUserByEmailAndVendorId(email, vendor_id);
         } else {
-            user = await UserModel.getUserByEmailAndRole(email, [ROLES.ADMIN, ROLES.SUPER_ADMIN]);
+            user = await UserModel.getUserByEmailAndRole(email, [ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.VENDOR]);
         }
 
         if (!user) {
@@ -307,7 +307,7 @@ export const customerSignin = async (req, res) => {
 
         const { email, password, vendor_id } = body;
 
-        const vendorData = await UserModel.getVendorById(vendor_id);
+        const vendorData = await VendorModel.getVendorById(vendor_id);
         if (!vendorData) {
             return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
         }

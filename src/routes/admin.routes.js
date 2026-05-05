@@ -1,12 +1,13 @@
-import * as supportTicketsController from "#controllers/support.tickets.controller.js";
+import * as supportTicketsController from "#controllers/support.ticket.controller.js";
 import * as settingsController from "#controllers/settings.controller.js";
 import * as CountriesController from "#controllers/countries.controller.js";
-import * as CurrenciesController from "#controllers/currencies.controller.js";
-import * as AdminTypesController from "#controllers/admin.types.controller.js";
-import * as AdminsController from "#controllers/admins.controller.js";
+import * as CurrenciesController from "#controllers/currency.controller.js";
+import * as AdminTypesController from "#controllers/admin.type.controller.js";
+import * as AdminsController from "#controllers/admin.controller.js";
+import * as PermissionsController from "#controllers/permission.controller.js";
 import pagination from "#middlewares/pagination.middleware.js";
 import { Router } from "express";
-import { authenticated, isAllAdmin } from "#middlewares/auth.middleware.js";
+import { authenticated, isAllAdmin, isSuperAdmin } from "#middlewares/auth.middleware.js";
 const router = Router();
 
 //currencies
@@ -43,8 +44,13 @@ router.delete("/admin-types/delete/:id", isAllAdmin, AdminTypesController.delete
 //admins
 router.post("/admins/create", isAllAdmin, AdminsController.createAdmin);
 router.get("/admins", pagination, isAllAdmin, authenticated, AdminsController.fetchAdmins);
-router.get("/admins/view/:id", isAllAdmin, authenticated, AdminsController.fetchAdminById);
+router.get("/admins/:id", isAllAdmin, authenticated, AdminsController.fetchAdminById);
 router.patch("/admins/update/:id", isAllAdmin, AdminsController.updateAdmin);
 router.delete("/admins/delete/:id", isAllAdmin, AdminsController.deleteAdmin);
+
+// admin permissions
+router.post("/admins/permissions/assign", isSuperAdmin, PermissionsController.assignAdminPermissions);
+router.get("/admins/permissions/:adminId", isSuperAdmin, PermissionsController.fetchAdminPermissions);
+
 
 export default router;

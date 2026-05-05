@@ -83,6 +83,290 @@ class CustomerModel {
             client.release();
         }
     }
+
+    static async getProfile(userId) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT
+                    u.id, u.firstname, u.lastname, u.email,
+                    u.phone, u.role, u.status,
+                    ui.avatar, ui.gender, ui.date_of_birth,
+                    ui.city, ui.state, ui.country_id,
+                    u.created_at,
+                    json_agg(DISTINCT jsonb_build_object(
+                        'id', ua.id,
+                        'firstname', ua.firstname,
+                        'lastname', ua.lastname,
+                        'phone', ua.phone,
+                        'address', ua.address,
+                        'city', ua.city,
+                        'state', ua.state,
+                        'country', ua.country,
+                        'zip_code', ua.zip_code,
+                        'is_default', ua.is_default
+                    )) FILTER (WHERE ua.id IS NOT NULL) AS addresses
+                FROM users u
+                LEFT JOIN users_info ui ON ui.user_id = u.id
+                LEFT JOIN user_addresses ua ON ua.user_id = u.id
+                WHERE u.id = $1 AND u.deleted_at IS NULL
+                GROUP BY u.id, ui.id`,
+                [userId]
+            );
+
+            return rows[0] ?? null;
+        } catch (error) {
+            console.error("Error fetching profile:", error);
+            throw error;
+        }
+    }
+
+    static async updateProfile(userId, data) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const { firstname, lastname, phone, gender, date_of_birth, avatar } = data;
+
+            // Upload avatar to S3 if provided
+            const avatarUrl = avatar
+                ? await uploadBase64ToS3(avatar, 'avatars')
+                : null;
+
+            // Update users table
+            if (firstname || lastname || phone) {
+                await client.query(
+                    `UPDATE users SET
+                        firstname   = COALESCE($1, firstname),
+                        lastname    = COALESCE($2, lastname),
+                        phone       = COALESCE($3, phone),
+                        updated_at  = NOW()
+                    WHERE id = $4 AND deleted_at IS NULL`,
+                    [firstname ?? null, lastname ?? null, phone ?? null, userId]
+                );
+            }
+
+            // Upsert users_info table
+            await client.query(
+                `INSERT INTO users_info (user_id, avatar, gender, date_of_birth)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    avatar          = COALESCE(EXCLUDED.avatar, users_info.avatar),
+                    gender          = COALESCE(EXCLUDED.gender, users_info.gender),
+                    date_of_birth   = COALESCE(EXCLUDED.date_of_birth, users_info.date_of_birth),
+                    updated_at      = NOW()`,
+                [userId, avatarUrl, gender ?? null, date_of_birth ?? null]
+            );
+
+            await client.query('COMMIT');
+
+            return await CustomerModel.getProfile(userId);
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error("Error updating profile:", error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async addAddress(userId, data) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const { firstname, lastname, phone, address, city, state, country, zip_code, is_default } = data;
+
+            // If new address is default unset others
+            if (is_default) {
+                await client.query(
+                    `UPDATE user_addresses SET is_default = false WHERE user_id = $1`,
+                    [userId]
+                );
+            }
+
+            // Check if this is first address — auto set as default
+            const { rows: existing } = await client.query(
+                `SELECT id FROM user_addresses WHERE user_id = $1`,
+                [userId]
+            );
+
+            const setDefault = is_default || existing.length === 0;
+
+            const { rows } = await client.query(
+                `INSERT INTO user_addresses
+                (user_id, firstname, lastname, phone, address, city, state, country, zip_code, is_default)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING *`,
+                [userId, firstname, lastname, phone, address, city, state, country, zip_code ?? null, setDefault]
+            );
+
+            await client.query('COMMIT');
+            return rows[0];
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error("Error adding address:", error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async updateAddress(userId, addressId, data) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Verify address belongs to user
+            const { rows: existing } = await client.query(
+                `SELECT id FROM user_addresses WHERE id = $1 AND user_id = $2`,
+                [addressId, userId]
+            );
+
+            if (existing.length === 0) {
+                return { error: 'Address not found', code: 404 };
+            }
+
+            // If updating to default unset others
+            if (data.is_default) {
+                await client.query(
+                    `UPDATE user_addresses SET is_default = false WHERE user_id = $1`,
+                    [userId]
+                );
+            }
+
+            const { rows } = await client.query(
+                `UPDATE user_addresses SET
+                    firstname   = COALESCE($1, firstname),
+                    lastname    = COALESCE($2, lastname),
+                    phone       = COALESCE($3, phone),
+                    address     = COALESCE($4, address),
+                    city        = COALESCE($5, city),
+                    state       = COALESCE($6, state),
+                    country     = COALESCE($7, country),
+                    zip_code    = COALESCE($8, zip_code),
+                    is_default  = COALESCE($9, is_default),
+                    updated_at  = NOW()
+                WHERE id = $10 AND user_id = $11
+                RETURNING *`,
+                [
+                    data.firstname ?? null, data.lastname ?? null,
+                    data.phone ?? null, data.address ?? null,
+                    data.city ?? null, data.state ?? null,
+                    data.country ?? null, data.zip_code ?? null,
+                    data.is_default ?? null,
+                    addressId, userId
+                ]
+            );
+
+            await client.query('COMMIT');
+            return rows[0];
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error("Error updating address:", error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async deleteAddress(userId, addressId) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Verify address belongs to user
+            const { rows: existing } = await client.query(
+                `SELECT * FROM user_addresses WHERE id = $1 AND user_id = $2`,
+                [addressId, userId]
+            );
+
+            if (existing.length === 0) {
+                return { error: 'Address not found', code: 404 };
+            }
+
+            const address = existing[0];
+
+            await client.query(
+                `DELETE FROM user_addresses WHERE id = $1`,
+                [addressId]
+            );
+
+            // If deleted address was default set another as default
+            if (address.is_default) {
+                await client.query(
+                    `UPDATE user_addresses SET is_default = true
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT 1`,
+                    [userId]
+                );
+            }
+
+            await client.query('COMMIT');
+            return { success: true };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error("Error deleting address:", error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async getAddresses(userId) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT * FROM user_addresses
+                WHERE user_id = $1
+                ORDER BY is_default DESC, created_at DESC`,
+                [userId]
+            );
+            return rows;
+        } catch (error) {
+            console.error("Error fetching addresses:", error);
+            throw error;
+        }
+    }
+
+    static async setDefaultAddress(userId, addressId) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Verify address belongs to user
+            const { rows: existing } = await client.query(
+                `SELECT id FROM user_addresses WHERE id = $1 AND user_id = $2`,
+                [addressId, userId]
+            );
+
+            if (existing.length === 0) {
+                return { error: 'Address not found', code: 404 };
+            }
+
+            // Unset all defaults
+            await client.query(
+                `UPDATE user_addresses SET is_default = false WHERE user_id = $1`,
+                [userId]
+            );
+
+            // Set new default
+            const { rows } = await client.query(
+                `UPDATE user_addresses SET is_default = true
+                WHERE id = $1 AND user_id = $2
+                RETURNING *`,
+                [addressId, userId]
+            );
+
+            await client.query('COMMIT');
+            return rows[0];
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error("Error setting default address:", error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 };
 
 export default CustomerModel;

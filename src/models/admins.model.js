@@ -9,10 +9,10 @@ export class AdminModel {
             let query = `
                 SELECT 
                     u.id, u.firstname, u.lastname, u.email, 
-                    u.phone, u.role, u.status, u.admin_role,
+                    u.phone, u.country_id, u.role, u.status, u.admin_role,
                     u.created_at,
-                    ui.avatar, ui.gender, ui.date_of_birth,
-                    ui.city, ui.state, ui.country_id
+                    ui.avatar, ui.gender, ui.dob,
+                    ui.city, ui.state
                 FROM users u
                 LEFT JOIN users_info ui ON ui.user_id = u.id
                 WHERE u.role IN ($1, $2)
@@ -51,13 +51,14 @@ export class AdminModel {
             const adminQuery = `
             SELECT 
                 u.id, u.firstname, u.lastname, u.email, 
-                u.phone, u.role, u.status, u.admin_role,
+                u.phone, u.country_id, c.name AS country_name, u.role, u.status, u.admin_role,
                 u.vendor_id,
                 u.created_at, u.updated_at,
-                ui.avatar, ui.gender, ui.date_of_birth,
-                ui.city, ui.state, ui.country_id
+                ui.avatar, ui.gender, ui.dob,
+                ui.city, ui.state
             FROM users u
             LEFT JOIN users_info ui ON ui.user_id = u.id
+            LEFT JOIN countries c ON c.id = u.country_id
             WHERE u.id = $1
             AND u.role IN ($2, $3, $4)
             AND u.deleted_at IS NULL

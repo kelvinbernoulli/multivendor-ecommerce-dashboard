@@ -4,7 +4,7 @@ import CustomerModel from "#models/customer.model.js";
 import { sendAdminRegistrationEmail } from "#models/mail.model.js";
 import UserModel from "#models/user.model.js";
 import VendorModel from "#models/vendor.model.js";
-import { createAdminSchema } from "#schemas/admins.schema.js";
+import { createAdminSchema, updateAdminSchema } from "#schemas/admins.schema.js";
 import ERROR_CODES from "#utils/error.codes.js";
 import { adminDefaultPassword, isValidEmail, normalizePhone, passwordHash, ROLES } from "#utils/helpers.js";
 import { respondWithError, respondWithSuccess } from "#utils/response.js";
@@ -114,26 +114,53 @@ export const updateAdmin = async (req, res) => {
             vendorId = user.vendor_id;
         }
 
+        let phone = null;
+        if (body.phone) {
+            phone = normalizePhone(body.phone);
+            body.phone = phone;
+        }
+
         let adminData;
+
         if (vendorId) {
-            adminData = await VendorModel.getVendorAdminById(id, vendorId)
-                ?? await CustomerModel.getCustomerById(id, vendorId);
-            if (!adminData) {
-                return respondWithError(res, 404, "User not found", ERROR_CODES.RESOURCE_NOT_FOUND);
-            }
-        } else {
-            adminData = await UserModel.getAdminUserById(id);
+            adminData = await VendorModel.getVendorAdminById(id, vendorId);
+
             if (!adminData) {
                 return respondWithError(res, 404, "Admin not found", ERROR_CODES.RESOURCE_NOT_FOUND);
+            }
+
+            if (phone && phone !== adminData.phone) {
+                const duplicatePhone = await VendorModel.getVendorAdminByPhone(phone, vendorId);
+
+                if (duplicatePhone) {
+                    return respondWithError(res, 409, "Phone number already exists", ERROR_CODES.RESOURCE_CONFLICT);
+                }
+            }
+
+        } else {
+            adminData = await UserModel.getAdminUserById(id);
+
+            if (!adminData) {
+                return respondWithError(res, 404, "Admin not found", ERROR_CODES.RESOURCE_NOT_FOUND);
+            }
+
+            if (phone && phone !== adminData.phone) {
+                const duplicatePhone = await UserModel.getAdminUserByPhone(phone);
+
+                if (duplicatePhone) {
+                    return respondWithError(res, 409, "Phone number already exists", ERROR_CODES.RESOURCE_CONFLICT);
+                }
             }
         }
 
         const result = await UserModel.updateAdmin(id, body);
+
         if (!result) {
-            return respondWithError(res, 500, "Failed to update admin", ERROR_CODES.INTERNAL_SERVER_ERROR);
+            return respondWithError(res, 500, "Failed to update admin", ERROR_CODES.RESOURCE_UPDATE_FAILED);
         }
 
         return respondWithSuccess(res, 200, "Admin updated successfully", result);
+
     } catch (error) {
         console.error("Error updating admin:", error);
         return respondWithError(res, 500, error.message || 'Internal Server Error', ERROR_CODES.INTERNAL_SERVER_ERROR);
@@ -155,7 +182,7 @@ export const fetchAdmins = async (req, res) => {
 
         const admins = await AdminModel.fetchAdmins(vendorId, offset, limit);
         if (!admins) {
-            return respondWithError(res, 404, "No admins found");
+            return respondWithError(res, 404, "No admins found", ERROR_CODES.RESOURCE_NOT_FOUND);
         }
 
         return respondWithSuccess(res, 200, "Admin retrieved successfully", admins);

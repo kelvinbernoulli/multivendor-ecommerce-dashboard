@@ -21,7 +21,7 @@ const checkPermission = (routeType, permissionType) => {
             }
 
             // Super Admin bypass
-            if (user?.id === 1 || user?.role === ROLES.SUPER_ADMIN) {
+            if (user?.role === ROLES.SUPER_ADMIN) {
                 return next();
             }
 
@@ -83,6 +83,7 @@ const checkRole = (expectedRoles) => async (req, res, next) => {
                     case ROLES.SUPER_ADMIN: return 'Super Admin';
                     case ROLES.ADMIN: return 'Admin';
                     case ROLES.VENDOR: return 'Vendor';
+                    case ROLES.VENDOR_ADMIN: return 'Vendor Admin';
                     case ROLES.CUSTOMER: return 'Customer';
                     default: return 'Unknown';
                 }
@@ -98,18 +99,19 @@ const checkRole = (expectedRoles) => async (req, res, next) => {
 };
 
 // Define specific permission checkers
-export const canCreate = checkPermission('create');
-export const canRead = checkPermission('read');
-export const canUpdate = checkPermission('update');
-export const canDelete = checkPermission('delete');
+export const canCreate = checkPermission('can_create');
+export const canRead = checkPermission('can_read');
+export const canUpdate = checkPermission('can_update');
+export const canDelete = checkPermission('can_delete');
 
 export const isSuperAdmin = checkRole([ROLES.SUPER_ADMIN]);
 export const isAdmin = checkRole([ROLES.ADMIN]);
 export const isVendor = checkRole([ROLES.VENDOR]);
 export const isVendorAdmin = checkRole([ROLES.VENDOR_ADMIN]);
+export const isVendorAndVendorAdmin = checkRole([ROLES.VENDOR, ROLES.VENDOR_ADMIN]);
 export const isAllAdmin = checkRole([ROLES.SUPER_ADMIN, ROLES.ADMIN]);
 export const isAllUsers = checkRole([ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.VENDOR_ADMIN, ROLES.VENDOR, ROLES.CUSTOMER]);
-export const isACustomer = checkRole([ROLES.CUSTOMER]);
+export const isCustomer = checkRole([ROLES.CUSTOMER]);
 
 
 export default {
@@ -122,7 +124,8 @@ export default {
     isAdmin,
     isVendor,
     isVendorAdmin,
+    isVendorAndVendorAdmin,
     isAllAdmin,
     isAllUsers,
-    isACustomer
+    isCustomer
 }

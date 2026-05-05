@@ -61,6 +61,23 @@ class AdminType {
 
         return rows;
     }
+
+    static async getAdminTypesByIds(ids, vendorId = null) {
+        console.log("Fetching admin types with IDs:", ids, "for vendorId:", vendorId);
+        const { rows } = await pool.query(
+            `SELECT * FROM admin_types 
+            WHERE id = ANY($1::integer[])
+            AND deleted_at IS NULL
+            AND (
+                $2::integer IS NULL
+                OR vendor_id = $2
+                OR vendor_id IS NULL
+            )`,
+            [ids, vendorId]
+        );
+        console.log("Fetched admin types:", rows);
+        return rows;
+    }
 }
 
 export default AdminType;

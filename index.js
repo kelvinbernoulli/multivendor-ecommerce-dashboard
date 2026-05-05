@@ -16,6 +16,7 @@ import { dirname } from "path";
 
 import auth from "#routes/auth.routes.js";
 import admin from "#routes/admin.routes.js";
+import vendor from "#routes/vendor.routes.js";
 import web from "#routes/web.routes.js";
 import passport from 'passport';
 import sessionMiddleware from '#config/session.js';
@@ -24,7 +25,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 5050;
+const PORT = process.env.PORT || 5000;
 const APP_VERSION = "v1";
 const REQUEST_SIZE_LIMIT = `${process.env.REQUEST_SIZE_LIMIT || 10}mb`;
 
@@ -78,6 +79,7 @@ app.use("/assets", express.static(path.join(__dirname, "assets")));
 // Routes
 app.use(`/${APP_VERSION}/auth`, auth);
 app.use(`/${APP_VERSION}/admin`, admin);
+app.use(`/${APP_VERSION}/vendor`, vendor);
 app.use(`/${APP_VERSION}`, web);
 
 // Root — UA parser (consider removing or restricting in production)
