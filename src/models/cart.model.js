@@ -1,169 +1,368 @@
+import pool from "#services/pg_pool.js";
+
 export class Cart {
-    static async addToCart(userId, vendorId, { product_id, variant_id, quantity }) {
+    static async addToCart(userId, { product_id, variant_id = null, quantity }) {
+
         const client = await pool.connect();
+
         try {
             await client.query('BEGIN');
+            const { rows: productRows } =
+                await client.query(
+                    `
+                        SELECT * FROM products
+                        WHERE id = $1
+                        AND status = 'active'
+                        AND deleted_at IS NULL
+                        LIMIT 1
+                        FOR UPDATE
+                    `,
+                    [product_id]
+                );
 
-            // 1. Verify product exists and belongs to vendor
-            const { rows: productRows } = await client.query(
-                `SELECT * FROM products 
-                WHERE id = $1 AND vendor_id = $2 
-                AND status = 'active' AND deleted_at IS NULL`,
-                [product_id, vendorId]
-            );
+            if (!productRows.length) {
+                await client.query('ROLLBACK');
 
-            if (productRows.length === 0) {
-                return { error: 'Product not found or unavailable', code: 404 };
+                return { error: 'Product not found', code: 404 };
             }
 
             const product = productRows[0];
 
-            // 2. Verify variant if provided
-            let price = product.price;
-            if (variant_id) {
-                const { rows: variantRows } = await client.query(
-                    `SELECT * FROM product_variants 
-                    WHERE id = $1 AND product_id = $2 AND status = 'active'`,
-                    [variant_id, product_id]
-                );
+            const vendorId = product.vendor_id;
 
-                if (variantRows.length === 0) {
-                    return { error: 'Variant not found or unavailable', code: 404 };
+            if (quantity <= 0) {
+                await client.query('ROLLBACK');
+
+                return { error: 'Quantity must be greater than 0', code: 422 };
+            }
+
+            let price = product.price;
+            let stock = product.stock;
+
+            if (variant_id) {
+
+                const { rows: variantRows } =
+                    await client.query(
+                        `
+                            SELECT * FROM product_variants
+                            WHERE id = $1
+                            AND product_id = $2
+                            LIMIT 1
+                            FOR UPDATE
+                        `,
+                        [variant_id, product_id]
+                    );
+
+                if (!variantRows.length) {
+                    await client.query('ROLLBACK');
+
+                    return { error: 'Variant not found', code: 404 };
                 }
 
                 const variant = variantRows[0];
 
-                // 3. Check variant stock
-                if (variant.stock < quantity) {
-                    return { error: `Only ${variant.stock} items available in stock`, code: 422 };
-                }
-
                 price = variant.price;
-            } else {
-                // 3. Check product stock
-                if (product.stock < quantity) {
-                    return { error: `Only ${product.stock} items available in stock`, code: 422 };
-                }
+                stock = variant.stock;
             }
 
-            // 4. Get or create cart
-            const { rows: cartRows } = await client.query(
-                `INSERT INTO carts (user_id, vendor_id)
-                VALUES ($1, $2)
-                ON CONFLICT (user_id, vendor_id) DO UPDATE SET updated_at = NOW()
-                RETURNING *`,
-                [userId, vendorId]
+            const { rows: existingItemRows } = await client.query(
+                `
+                    SELECT ci.*
+                    FROM cart_items ci
+                    INNER JOIN carts c ON c.id = ci.cart_id
+                    WHERE c.user_id = $1
+                    AND c.vendor_id = $2
+                    AND ci.product_id = $3
+                    AND (
+                        ($4::INT IS NULL AND ci.variant_id IS NULL)
+                        OR ci.variant_id = $4
+                    )
+                `,
+                [userId, vendorId, product_id, variant_id]
             );
 
-            const cartId = cartRows[0].id;
+            const existingItem =
+                existingItemRows[0] || null;
 
-            // 5. Add or update cart item
-            const { rows: itemRows } = await client.query(
-                `INSERT INTO cart_items (cart_id, product_id, variant_id, quantity, price)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (cart_id, product_id, variant_id)
-                DO UPDATE SET 
-                    quantity = cart_items.quantity + EXCLUDED.quantity,
-                    price = EXCLUDED.price,
-                    updated_at = NOW()
-                RETURNING *`,
-                [cartId, product_id, variant_id ?? null, quantity, price]
-            );
+            const totalRequestedQty = Number(existingItem?.quantity || 0) + Number(quantity);
+            if (
+                product.track_inventory &&
+                stock < totalRequestedQty
+            ) {
+                await client.query('ROLLBACK');
+
+                return {
+                    error: `Only ${stock} items available in stock`,
+                    code: 422
+                };
+            }
+
+            const { rows: cartRows } =
+                await client.query(
+                    `
+                        INSERT INTO carts (
+                            user_id,
+                            vendor_id
+                        )
+                        VALUES ($1, $2)
+                        ON CONFLICT (user_id, vendor_id)
+                        DO UPDATE SET
+                            updated_at = NOW()
+                        RETURNING *
+                    `,
+                    [userId, vendorId]
+                );
+
+            const cart = cartRows[0];
+
+            let cartItem;
+
+            if (existingItem) {
+
+                const { rows } =
+                    await client.query(
+                        `
+                            UPDATE cart_items
+                            SET
+                                quantity = quantity + $1,
+                                price = $2,
+                                updated_at = NOW()
+                            WHERE id = $3
+                            RETURNING *
+                        `,
+                        [Number(quantity), Number(price), existingItem.id]
+                    );
+
+                cartItem = rows[0];
+
+            } else {
+
+                const { rows } =
+                    await client.query(
+                        `
+                            INSERT INTO cart_items (
+                                cart_id, vendor_id, product_id, variant_id, quantity, price
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING *
+                        `,
+                        [cart.id, vendorId, product_id, variant_id, quantity, price]
+                    );
+
+                cartItem = rows[0];
+            }
 
             await client.query('COMMIT');
 
-            // 6. Return full cart
             return await Cart.getCart(userId, vendorId);
+
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error("Error adding to cart:", error);
+            console.error('Error adding to cart:', error);
             throw error;
         } finally {
             client.release();
         }
     }
 
-    static async upsertCartItem(userId, vendorId, { product_id, variant_id, quantity }) {
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
+    static async updateCart(
+    userId,
+    vendorId,
+    {
+        product_id,
+        variant_id = null,
+        quantity
+    } = {}
+) {
 
-            // 1. Verify product exists and belongs to vendor
-            const { rows: productRows } = await client.query(
-                `SELECT * FROM products 
-            WHERE id = $1 AND vendor_id = $2 
-            AND status = 'active' AND deleted_at IS NULL`,
-                [product_id, vendorId]
-            );
+    const client = await pool.connect();
 
-            if (productRows.length === 0) {
-                return { error: 'Product not found or unavailable', code: 404 };
-            }
+    try {
 
-            const product = productRows[0];
+        await client.query('BEGIN');
 
-            // 2. Verify variant and get price
-            let price = product.price;
-            if (variant_id) {
-                const { rows: variantRows } = await client.query(
-                    `SELECT * FROM product_variants 
-                WHERE id = $1 AND product_id = $2 AND status = 'active'`,
-                    [variant_id, product_id]
-                );
+        /*
+        |--------------------------------------------------------------------------
+        | Verify Product
+        |--------------------------------------------------------------------------
+        */
 
-                if (variantRows.length === 0) {
-                    return { error: 'Variant not found or unavailable', code: 404 };
-                }
+        const { rows: productRows } = await client.query(
+            `
+            SELECT *
+            FROM products
+            WHERE id = $1
+            AND vendor_id = $2
+            AND status = 'active'
+            AND deleted_at IS NULL
+            `,
+            [product_id, vendorId]
+        );
 
-                const variant = variantRows[0];
-                if (variant.stock < quantity) {
-                    return { error: `Only ${variant.stock} items available in stock`, code: 422 };
-                }
+        if (!productRows.length) {
 
-                price = variant.price;
-            } else {
-                if (product.stock < quantity) {
-                    return { error: `Only ${product.stock} items available in stock`, code: 422 };
-                }
-            }
-
-            // 3. Get or create cart
-            const { rows: cartRows } = await client.query(
-                `INSERT INTO carts (user_id, vendor_id)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id, vendor_id) DO UPDATE SET updated_at = NOW()
-            RETURNING *`,
-                [userId, vendorId]
-            );
-
-            const cartId = cartRows[0].id;
-
-            // 4. Upsert cart item
-            // ON CONFLICT → replace quantity not increment
-            await client.query(
-                `INSERT INTO cart_items (cart_id, product_id, variant_id, quantity, price)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (cart_id, product_id, variant_id)
-            DO UPDATE SET
-                quantity   = EXCLUDED.quantity,
-                price      = EXCLUDED.price,
-                updated_at = NOW()`,
-                [cartId, product_id, variant_id ?? null, quantity, price]
-            );
-
-            await client.query('COMMIT');
-
-            return await Cart.getCart(userId, vendorId);
-        } catch (error) {
             await client.query('ROLLBACK');
-            console.error("Error upserting cart item:", error);
-            throw error;
-        } finally {
-            client.release();
-        }
-    }
 
-    static async getCartItem(userId, vendorId) {
+            return {
+                error: 'Product not found or unavailable',
+                code: 404
+            };
+        }
+
+        const product = productRows[0];
+
+        /*
+        |--------------------------------------------------------------------------
+        | Verify Variant + Stock
+        |--------------------------------------------------------------------------
+        */
+
+        let price = product.price;
+
+        if (variant_id) {
+
+            const { rows: variantRows } = await client.query(
+                `
+                SELECT *
+                FROM product_variants
+                WHERE id = $1
+                AND product_id = $2
+                AND status = 'active'
+                `,
+                [variant_id, product_id]
+            );
+
+            if (!variantRows.length) {
+
+                await client.query('ROLLBACK');
+
+                return {
+                    error: 'Variant not found or unavailable',
+                    code: 404
+                };
+            }
+
+            const variant = variantRows[0];
+
+            if (variant.stock < quantity) {
+
+                await client.query('ROLLBACK');
+
+                return {
+                    error: `Only ${variant.stock} items available in stock`,
+                    code: 422
+                };
+            }
+
+            price = variant.price;
+
+        } else {
+
+            if (product.stock < quantity) {
+
+                await client.query('ROLLBACK');
+
+                return {
+                    error: `Only ${product.stock} items available in stock`,
+                    code: 422
+                };
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Get Existing Cart
+        |--------------------------------------------------------------------------
+        */
+
+        const { rows: cartRows } = await client.query(
+            `
+            SELECT *
+            FROM carts
+            WHERE user_id = $1
+            AND vendor_id = $2
+            LIMIT 1
+            `,
+            [userId, vendorId]
+        );
+
+        if (!cartRows.length) {
+
+            await client.query('ROLLBACK');
+
+            return {
+                error: 'Cart not found',
+                code: 404
+            };
+        }
+
+        const cart = cartRows[0];
+
+        /*
+        |--------------------------------------------------------------------------
+        | Update Existing Cart Item
+        |--------------------------------------------------------------------------
+        */
+
+        const { rows: itemRows } = await client.query(
+            `
+            UPDATE cart_items
+            SET
+                quantity = $1,
+                price = $2,
+                updated_at = NOW()
+            WHERE cart_id = $3
+            AND product_id = $4
+            AND (
+                ($5::INT IS NULL AND variant_id IS NULL)
+                OR variant_id = $5
+            )
+            RETURNING *
+            `,
+            [
+                quantity,
+                price,
+                cart.id,
+                product_id,
+                variant_id
+            ]
+        );
+
+        if (!itemRows.length) {
+
+            await client.query('ROLLBACK');
+
+            return {
+                error: 'Cart item not found',
+                code: 404
+            };
+        }
+
+        await client.query('COMMIT');
+
+        return await Cart.getCart(
+            userId,
+            vendorId
+        );
+
+    } catch (error) {
+
+        await client.query('ROLLBACK');
+
+        console.error(
+            'Error updating cart item:',
+            error
+        );
+
+        throw error;
+
+    } finally {
+
+        client.release();
+    }
+}
+
+    static async getCart(userId, vendorId) {
         try {
             const { rows } = await pool.query(
                 `SELECT
@@ -238,43 +437,70 @@ export class Cart {
         try {
             await client.query('BEGIN');
 
-            // 1. Verify cart item belongs to user and vendor
             const { rows: itemRows } = await client.query(
-                `SELECT ci.* FROM cart_items ci
-            JOIN carts c ON c.id = ci.cart_id
-            WHERE ci.id = $1 AND c.user_id = $2 AND c.vendor_id = $3`,
+                `
+                    SELECT ci.*
+                    FROM cart_items ci
+                    INNER JOIN carts c ON c.id = ci.cart_id
+                    WHERE ci.id = $1
+                    AND c.user_id = $2
+                    AND c.vendor_id = $3
+                    FOR UPDATE
+                `,
                 [cartItemId, userId, vendorId]
             );
+            console.log('item', itemRows)
+            if (!itemRows.length) {
+                await client.query('ROLLBACK');
 
-            if (itemRows.length === 0) {
-                return { error: 'Cart item not found', code: 404 };
+                return {
+                    error: 'Cart item not found',
+                    code: 404
+                };
             }
 
-            // 2. Delete cart item
+            const cartItem = itemRows[0];
+
             await client.query(
-                `DELETE FROM cart_items WHERE id = $1`,
+                `
+                    DELETE FROM cart_items
+                    WHERE id = $1
+                `,
                 [cartItemId]
             );
 
-            // 3. If cart is empty delete it too
             const { rows: remainingItems } = await client.query(
-                `SELECT id FROM cart_items WHERE cart_id = $1`,
-                [itemRows[0].cart_id]
+                `
+                    SELECT 1
+                    FROM cart_items
+                    WHERE cart_id = $1
+                    LIMIT 1
+                `,
+                [cartItem.cart_id]
             );
 
             if (remainingItems.length === 0) {
+
                 await client.query(
-                    `DELETE FROM carts WHERE id = $1`,
-                    [itemRows[0].cart_id]
+                    `
+                        DELETE FROM carts
+                        WHERE id = $1
+                    `,
+                    [cartItem.cart_id]
                 );
             }
 
             await client.query('COMMIT');
 
-            // 4. Return updated cart or empty if cart was deleted
             return remainingItems.length > 0
                 ? await CartModel.getCart(userId, vendorId)
-                : { cart_id: null, items: [], total: 0, item_count: 0 };
+                : {
+                    cart_id: null,
+                    items: [],
+                    total: 0,
+                    item_count: 0
+                };
+
         } catch (error) {
             await client.query('ROLLBACK');
             console.error("Error removing cart item:", error);

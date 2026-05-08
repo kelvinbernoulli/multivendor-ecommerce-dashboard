@@ -1,7 +1,10 @@
-import { getBase64Extension, S3upload } from "#services/s3upload.js";
+import pool from "#services/pg_pool.js";
+import { getBase64Extension, S3delete, S3upload, uploadFileToS3 } from "#services/s3upload.js";
+import crypto from "crypto";
+import slugify from "slugify";
 
 export class Product {
-    static async create(req, vendorId, data) {
+    static async create(vendorId, data) {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
@@ -17,15 +20,23 @@ export class Product {
                 meta_title, meta_description, slug
             } = data;
 
-            // Generate slug if not provided
+            // Generate slug
             const productSlug = slug
                 ? slug.toLowerCase().replace(/\s+/g, '-')
-                : name.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now();
+                : slugify(name, { lower: true }) + '-' + Date.now();
 
-            // Upload thumbnail            
-            const filename = `images/product-images/${name}.${getBase64Extension(thumbnail)}`;
+            // Upload thumbnail to S3
+            let thumbnailUrl = null;
+            if (thumbnail) {
+                const filename = `images/products/thumbnails/${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                const result = await uploadFileToS3(thumbnail, filename);
 
-            const thumbnailUrl = await S3upload(req, res, filename, thumbnail);
+                if (result.error) {
+                    throw new Error(`Failed to upload thumbnail: ${result.message}`);
+                }
+
+                thumbnailUrl = result.url;
+            }
 
             const hasVariants = variants && variants.length > 0;
 
@@ -35,7 +46,7 @@ export class Product {
                 vendor_id, category_id, subcategory_id, name, slug, description,
                 short_description, brand, tags, price, compare_at_price,
                 cost_price, discount, stock, low_stock_threshold,
-                track_inventory, has_variants, weight,
+                track_inventory, has_variants, thumbnail, weight,
                 length, width, height, free_shipping, status,
                 is_featured, is_digital, meta_title, meta_description
             ) VALUES (
@@ -44,10 +55,10 @@ export class Product {
                 $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
             ) RETURNING *`,
                 [
-                    vendorId, category_id, subcategory_id ?? null, name, productSlug,
-                    description ?? null, short_description ?? null,
-                    brand ?? null, tags ?? [],
-                    price, compare_at_price ?? null,
+                    vendorId, category_id, subcategory_id ?? null,
+                    name, productSlug, description ?? null,
+                    short_description ?? null, brand ?? null,
+                    tags ?? [], price, compare_at_price ?? null,
                     cost_price ?? null, discount ?? 0,
                     stock, low_stock_threshold ?? 5,
                     track_inventory ?? true, hasVariants,
@@ -64,13 +75,27 @@ export class Product {
 
             // 2. Upload and insert images
             if (images && images.length > 0) {
-                const filename = `images/product-images//${images}.${getBase64Extension(images)}`;
-                const imageUrls = await S3upload(req, res, filename, images);
+                const imageUrls = [];
+
+                for (let i = 0; i < images.length; i++) {
+                    const image = images[i];
+                    const filename = `products/images/${product.id}-${i}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+                    const result = await uploadFileToS3(image, filename);
+
+                    if (result.error) {
+                        throw new Error(`Failed to upload image ${i}: ${result.message}`);
+                    }
+
+                    imageUrls.push(result.url);
+                }
+
+                // Insert into database
                 for (let i = 0; i < imageUrls.length; i++) {
                     await client.query(
-                        `INSERT INTO product_images (product_id, url, position, is_primary)
-                    VALUES ($1, $2, $3, $4)`,
-                        [product.id, imageUrls[i], i, i === 0]
+                        `INSERT INTO product_images (product_id, vendor_id, url, position, is_primary)
+                        VALUES ($1, $2, $3, $4, $5)`,
+                        [product.id, vendorId, imageUrls[i], i, i === 0]
                     );
                 }
             }
@@ -80,7 +105,7 @@ export class Product {
                 for (let i = 0; i < attributes.length; i++) {
                     await client.query(
                         `INSERT INTO product_attributes (product_id, name, value, position)
-                    VALUES ($1, $2, $3, $4)`,
+                        VALUES ($1, $2, $3, $4)`,
                         [product.id, attributes[i].name, attributes[i].value, i]
                     );
                 }
@@ -114,16 +139,25 @@ export class Product {
             // 5. Insert variants
             if (hasVariants) {
                 for (const variant of variants) {
-                    const variantImageUrl = variant.image
-                        ? await uploadBase64ToS3(variant.image, 'products/variants')
-                        : null;
+                    let variantImageUrl = null;
+
+                    if (variant.image) {
+                        const filename = `products/variants/${product.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                        const result = await uploadFileToS3(variant.image, filename);
+
+                        if (result.error) {
+                            throw new Error(`Failed to upload variant image: ${result.message}`);
+                        }
+
+                        variantImageUrl = result.url;
+                    }
 
                     const { rows: variantRows } = await client.query(
                         `INSERT INTO product_variants (
-                            product_id, sku, barcode, price, compare_at_price,
-                            cost_price, stock, low_stock_threshold, weight, image
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                        RETURNING id`,
+                        product_id, sku, barcode, price, compare_at_price,
+                        cost_price, stock, low_stock_threshold, weight, image
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING id`,
                         [
                             product.id, variant.sku ?? null,
                             variant.barcode ?? null, variant.price,
@@ -136,7 +170,6 @@ export class Product {
 
                     const variantId = variantRows[0].id;
 
-                    // Link variant to option values
                     for (const optionValueId of variant.option_values) {
                         await client.query(
                             `INSERT INTO variant_option_values (variant_id, option_value_id)
@@ -149,7 +182,11 @@ export class Product {
 
             await client.query('COMMIT');
 
-            return await Product.findByKey(product.id, client);
+            // Return full product
+            return await Product.findByKey(
+                [{ key: 'id', value: product.id }],
+                vendorId
+            );
 
         } catch (error) {
             await client.query('ROLLBACK');
@@ -190,50 +227,54 @@ export class Product {
             whereClauses.push(`p.deleted_at IS NULL`);
 
             const query = `
-            SELECT
-                p.*,
-                json_agg(DISTINCT jsonb_build_object(
-                    'id', pi.id,
-                    'url', pi.url,
-                    'alt_text', pi.alt_text,
-                    'position', pi.position,
-                    'is_primary', pi.is_primary
-                )) FILTER (WHERE pi.id IS NOT NULL) AS images,
-                json_agg(DISTINCT jsonb_build_object(
-                    'id', pa.id,
-                    'name', pa.name,
-                    'value', pa.value
-                )) FILTER (WHERE pa.id IS NOT NULL) AS attributes,
-                json_agg(DISTINCT jsonb_build_object(
-                    'id', po.id,
-                    'name', po.name,
-                    'position', po.position,
-                    'values', (
-                        SELECT json_agg(jsonb_build_object(
-                            'id', pov.id,
-                            'value', pov.value
-                        ) ORDER BY pov.position)
-                        FROM product_option_values pov
-                        WHERE pov.option_id = po.id
-                    )
-                )) FILTER (WHERE po.id IS NOT NULL) AS options,
-                json_agg(DISTINCT jsonb_build_object(
-                    'id', pv.id,
-                    'sku', pv.sku,
-                    'price', pv.price,
-                    'stock', pv.stock,
-                    'image', pv.image,
-                    'status', pv.status
-                )) FILTER (WHERE pv.id IS NOT NULL) AS variants
-            FROM products p
-            LEFT JOIN product_images pi ON pi.product_id = p.id
-            LEFT JOIN product_attributes pa ON pa.product_id = p.id
-            LEFT JOIN product_options po ON po.product_id = p.id
-            LEFT JOIN product_variants pv ON pv.product_id = p.id
-            WHERE ${whereClauses.join(' AND ')}
-            GROUP BY p.id
-            LIMIT 1
-        `;
+                SELECT
+                    p.*,
+                    c.name                          AS category_name,
+                    pc.name                         AS subcategory_name,
+                    json_agg(DISTINCT jsonb_build_object(
+                        'id', pi.id,
+                        'url', pi.url,
+                        'alt_text', pi.alt_text,
+                        'position', pi.position,
+                        'is_primary', pi.is_primary
+                    )) FILTER (WHERE pi.id IS NOT NULL) AS images,
+                    json_agg(DISTINCT jsonb_build_object(
+                        'id', pa.id,
+                        'name', pa.name,
+                        'value', pa.value
+                    )) FILTER (WHERE pa.id IS NOT NULL) AS attributes,
+                    json_agg(DISTINCT jsonb_build_object(
+                        'id', po.id,
+                        'name', po.name,
+                        'position', po.position,
+                        'values', (
+                            SELECT json_agg(jsonb_build_object(
+                                'id', pov.id,
+                                'value', pov.value
+                            ) ORDER BY pov.position)
+                            FROM product_option_values pov
+                            WHERE pov.option_id = po.id
+                        )
+                    )) FILTER (WHERE po.id IS NOT NULL) AS options,
+                    json_agg(DISTINCT jsonb_build_object(
+                        'id', pv.id,
+                        'sku', pv.sku,
+                        'price', pv.price,
+                        'stock', pv.stock,
+                        'image', pv.image,
+                        'status', pv.status
+                    )) FILTER (WHERE pv.id IS NOT NULL) AS variants
+                FROM products p
+                LEFT JOIN categories c ON c.id = p.category_id
+                LEFT JOIN categories pc ON pc.id = p.subcategory_id  -- subcategory is just a category
+                LEFT JOIN product_images pi ON pi.product_id = p.id
+                LEFT JOIN product_attributes pa ON pa.product_id = p.id
+                LEFT JOIN product_options po ON po.product_id = p.id
+                LEFT JOIN product_variants pv ON pv.product_id = p.id
+                WHERE ${whereClauses.join(' AND ')}
+                GROUP BY p.id, c.id, pc.id
+                LIMIT 1
+            `;
 
             const { rows } = await pool.query(query, values);
             return rows[0] ?? null;
@@ -245,201 +286,927 @@ export class Product {
 
     static async update(productId, vendorId, data) {
         const client = await pool.connect();
+
+        // Files uploaded during this request
+        const uploadedFiles = [];
+
+        // Old files to delete AFTER successful commit
+        const oldFilesToDelete = [];
+
         try {
             await client.query('BEGIN');
 
             const {
-                name, description, short_description, brand, tags,
-                category_id, subcategory_id, price, compare_at_price, cost_price, discount,
-                stock, low_stock_threshold, track_inventory,
-                thumbnail, images,
-                weight, length, width, height, free_shipping,
-                attributes, options, variants,
-                status, is_featured, is_digital,
-                meta_title, meta_description, slug
+                name,
+                description,
+                short_description,
+                brand,
+                tags,
+                category_id,
+                subcategory_id,
+                price,
+                compare_at_price,
+                cost_price,
+                discount,
+                stock,
+                low_stock_threshold,
+                track_inventory,
+                thumbnail,
+                images,
+                weight,
+                length,
+                width,
+                height,
+                free_shipping,
+                attributes,
+                options,
+                variants,
+                status,
+                is_featured,
+                is_digital,
+                meta_title,
+                meta_description
             } = data;
 
-            // Verify product belongs to vendor
-            const { rows: existing } = await client.query(
-                `SELECT * FROM products 
-            WHERE id = $1 AND vendor_id = $2 AND deleted_at IS NULL`,
+            /*
+            |--------------------------------------------------------------------------
+            | Validate Product Ownership
+            |--------------------------------------------------------------------------
+            */
+
+            const { rows: existingRows } = await client.query(
+                `
+            SELECT *
+            FROM products
+            WHERE id = $1
+            AND vendor_id = $2
+            AND deleted_at IS NULL
+            LIMIT 1
+            `,
                 [productId, vendorId]
             );
 
-            if (existing.length === 0) {
+            if (!existingRows.length) {
+                await client.query('ROLLBACK');
                 return null;
             }
 
-            const product = existing[0];
+            const existingProduct = existingRows[0];
 
-            // Generate slug if name changed
-            const productSlug = slug
-                ? slug.toLowerCase().replace(/\s+/g, '-')
-                : name
-                    ? name.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now()
-                    : product.slug;
+            /*
+            |--------------------------------------------------------------------------
+            | Basic Validation
+            |--------------------------------------------------------------------------
+            */
 
-            // Upload new thumbnail if provided
-            const thumbnailUrl = thumbnail
-                ? await uploadBase64ToS3(thumbnail, 'products/thumbnails')
-                : product.thumbnail;
+            if (price !== undefined && price < 0) {
+                throw new Error("Price cannot be negative");
+            }
 
-            const hasVariants = variants && variants.length > 0;
+            if (stock !== undefined && stock < 0) {
+                throw new Error("Stock cannot be negative");
+            }
 
-            // 1. Update product core fields
+            if (
+                discount !== undefined &&
+                (discount < 0 || discount > 100)
+            ) {
+                throw new Error("Discount must be between 0 and 100");
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Generate Slug
+            |--------------------------------------------------------------------------
+            */
+
+            let productSlug = existingProduct.slug;
+
+            if (name !== undefined) {
+                productSlug = `${slugify(name, {
+                    lower: true,
+                    strict: true
+                })}-${Date.now()}`;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Upload Thumbnail
+            |--------------------------------------------------------------------------
+            */
+
+            let thumbnailUrl = existingProduct.thumbnail;
+
+            if (thumbnail !== undefined) {
+                // Upload new thumbnail
+                if (thumbnail) {
+                    const filename = `products/thumbnails/${vendorId}-${crypto.randomUUID()}`;
+
+                    const upload = await uploadFileToS3(
+                        thumbnail,
+                        filename
+                    );
+
+                    if (upload.error) {
+                        throw new Error(upload.message);
+                    }
+
+                    thumbnailUrl = upload.url;
+
+                    uploadedFiles.push(upload.url);
+                } else {
+                    // Allow thumbnail removal
+                    thumbnailUrl = null;
+                }
+
+                // Delete old thumbnail after commit
+                if (existingProduct.thumbnail) {
+                    oldFilesToDelete.push(existingProduct.thumbnail);
+                }
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Variants State
+            |--------------------------------------------------------------------------
+            */
+
+            const hasVariants =
+                variants !== undefined
+                    ? variants.length > 0
+                    : existingProduct.has_variants;
+
+            /*
+            |--------------------------------------------------------------------------
+            | Dynamic Product Update
+            |--------------------------------------------------------------------------
+            */
+
+            const fields = [];
+            const values = [];
+            let index = 1;
+
+            const addField = (field, value) => {
+                fields.push(`${field} = $${index++}`);
+                values.push(value);
+            };
+
+            if (category_id !== undefined) {
+                addField("category_id", category_id);
+            }
+
+            if (subcategory_id !== undefined) {
+                addField("subcategory_id", subcategory_id);
+            }
+
+            if (name !== undefined) {
+                addField("name", name);
+            }
+
+            addField("slug", productSlug);
+
+            if (description !== undefined) {
+                addField("description", description);
+            }
+
+            if (short_description !== undefined) {
+                addField("short_description", short_description);
+            }
+
+            if (brand !== undefined) {
+                addField("brand", brand);
+            }
+
+            if (tags !== undefined) {
+                addField("tags", tags);
+            }
+
+            if (price !== undefined) {
+                addField("price", price);
+            }
+
+            if (compare_at_price !== undefined) {
+                addField("compare_at_price", compare_at_price);
+            }
+
+            if (cost_price !== undefined) {
+                addField("cost_price", cost_price);
+            }
+
+            if (discount !== undefined) {
+                addField("discount", discount);
+            }
+
+            if (stock !== undefined) {
+                addField("stock", stock);
+            }
+
+            if (low_stock_threshold !== undefined) {
+                addField(
+                    "low_stock_threshold",
+                    low_stock_threshold
+                );
+            }
+
+            if (track_inventory !== undefined) {
+                addField("track_inventory", track_inventory);
+            }
+
+            addField("has_variants", hasVariants);
+
+            if (thumbnail !== undefined) {
+                addField("thumbnail", thumbnailUrl);
+            }
+
+            if (weight !== undefined) {
+                addField("weight", weight);
+            }
+
+            if (length !== undefined) {
+                addField("length", length);
+            }
+
+            if (width !== undefined) {
+                addField("width", width);
+            }
+
+            if (height !== undefined) {
+                addField("height", height);
+            }
+
+            if (free_shipping !== undefined) {
+                addField("free_shipping", free_shipping);
+            }
+
+            if (status !== undefined) {
+                addField("status", status);
+            }
+
+            if (is_featured !== undefined) {
+                addField("is_featured", is_featured);
+            }
+
+            if (is_digital !== undefined) {
+                addField("is_digital", is_digital);
+            }
+
+            if (meta_title !== undefined) {
+                addField("meta_title", meta_title);
+            }
+
+            if (meta_description !== undefined) {
+                addField("meta_description", meta_description);
+            }
+
+            fields.push(`updated_at = NOW()`);
+
+            values.push(productId, vendorId);
+
+            const updateQuery = `
+            UPDATE products
+            SET ${fields.join(", ")}
+            WHERE id = $${index++}
+            AND vendor_id = $${index++}
+            AND deleted_at IS NULL
+            RETURNING *
+        `;
+
             const { rows: updatedRows } = await client.query(
-                `UPDATE products SET
-                category_id         = COALESCE($1, category_id),
-                subcategory_id      = COALESCE($2, subcategory_id),
-                name                = COALESCE($3, name),
-                slug                = COALESCE($4, slug),
-                description         = COALESCE($5, description),
-                short_description   = COALESCE($6, short_description),
-                brand               = COALESCE($7, brand),
-                tags                = COALESCE($8, tags),
-                price               = COALESCE($9, price),
-                compare_at_price    = COALESCE($10, compare_at_price),
-                cost_price          = COALESCE($11, cost_price),
-                discount            = COALESCE($12, discount),
-                stock               = COALESCE($13, stock),
-                low_stock_threshold = COALESCE($14, low_stock_threshold),
-                track_inventory     = COALESCE($15, track_inventory),
-                has_variants        = COALESCE($16, has_variants),
-                thumbnail           = COALESCE($17, thumbnail),
-                weight              = COALESCE($18, weight),
-                length              = COALESCE($19, length),
-                width               = COALESCE($20, width),
-                height              = COALESCE($21, height),
-                free_shipping       = COALESCE($22, free_shipping),
-                status              = COALESCE($23, status),
-                is_featured         = COALESCE($24, is_featured),
-                is_digital          = COALESCE($25, is_digital),
-                meta_title          = COALESCE($26, meta_title),
-                meta_description    = COALESCE($27, meta_description),
-                updated_at          = NOW()
-            WHERE id = $28 AND vendor_id = $29 AND deleted_at IS NULL
-            RETURNING *`,
-                [
-                    category_id ?? null, subcategory_id ?? null, name ?? null, productSlug ?? null,
-                    description ?? null, short_description ?? null,
-                    brand ?? null, tags ?? null,
-                    price ?? null, compare_at_price ?? null,
-                    cost_price ?? null, discount ?? null,
-                    stock ?? null, low_stock_threshold ?? null,
-                    track_inventory ?? null, hasVariants,
-                    thumbnailUrl ?? null, weight ?? null,
-                    length ?? null, width ?? null,
-                    height ?? null, free_shipping ?? null,
-                    status ?? null, is_featured ?? null,
-                    is_digital ?? null, meta_title ?? null,
-                    meta_description ?? null,
-                    productId, vendorId
-                ]
+                updateQuery,
+                values
             );
 
             const updatedProduct = updatedRows[0];
 
-            // 2. Update images — delete old and insert new
-            if (images && images.length > 0) {
-                await client.query(
-                    `DELETE FROM product_images WHERE product_id = $1`,
+            /*
+            |--------------------------------------------------------------------------
+            | Update Images
+            |--------------------------------------------------------------------------
+            */
+
+            if (images !== undefined) {
+
+                // Fetch old images
+                const { rows: oldImages } = await client.query(
+                    `
+                SELECT url
+                FROM product_images
+                WHERE product_id = $1
+                `,
                     [productId]
                 );
-                const imageUrls = await uploadImagesToS3(images, 'products');
-                for (let i = 0; i < imageUrls.length; i++) {
-                    await client.query(
-                        `INSERT INTO product_images (product_id, url, position, is_primary)
-                    VALUES ($1, $2, $3, $4)`,
-                        [productId, imageUrls[i], i, i === 0]
-                    );
+
+                oldImages.forEach(img => {
+                    if (img.url) {
+                        oldFilesToDelete.push(img.url);
+                    }
+                });
+
+                // Delete old DB records
+                await client.query(
+                    `
+                DELETE FROM product_images
+                WHERE product_id = $1
+                `,
+                    [productId]
+                );
+
+                // Insert new images
+                if (images.length) {
+                    for (let i = 0; i < images.length; i++) {
+
+                        const filename = `products/images/${productId}-${crypto.randomUUID()}`;
+
+                        const upload = await uploadFileToS3(
+                            images[i],
+                            filename
+                        );
+
+                        if (upload.error) {
+                            throw new Error(upload.message);
+                        }
+
+                        uploadedFiles.push(upload.url);
+
+                        await client.query(
+                            `
+                        INSERT INTO product_images (
+                            product_id,
+                            vendor_id,
+                            url,
+                            position,
+                            is_primary
+                        )
+                        VALUES ($1, $2, $3, $4, $5)
+                        `,
+                            [
+                                productId,
+                                vendorId,
+                                upload.url,
+                                i,
+                                i === 0
+                            ]
+                        );
+                    }
                 }
             }
 
-            // 3. Update attributes — delete old and insert new
-            if (attributes && attributes.length > 0) {
+            /*
+            |--------------------------------------------------------------------------
+            | Update Attributes
+            |--------------------------------------------------------------------------
+            */
+
+            if (attributes !== undefined) {
+
                 await client.query(
-                    `DELETE FROM product_attributes WHERE product_id = $1`,
+                    `
+                DELETE FROM product_attributes
+                WHERE product_id = $1
+                `,
                     [productId]
                 );
-                for (let i = 0; i < attributes.length; i++) {
-                    await client.query(
-                        `INSERT INTO product_attributes (product_id, name, value, position)
-                    VALUES ($1, $2, $3, $4)`,
-                        [productId, attributes[i].name, attributes[i].value, i]
-                    );
+
+                if (attributes.length) {
+                    for (let i = 0; i < attributes.length; i++) {
+
+                        const attr = attributes[i];
+
+                        await client.query(
+                            `
+                        INSERT INTO product_attributes (
+                            product_id,
+                            name,
+                            value,
+                            position
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        `,
+                            [
+                                productId,
+                                attr.name,
+                                attr.value,
+                                i
+                            ]
+                        );
+                    }
                 }
             }
 
-            // 4. Update options and option values — delete old and insert new
-            if (options && options.length > 0) {
+            /*
+            |--------------------------------------------------------------------------
+            | Update Options
+            |--------------------------------------------------------------------------
+            */
+
+            const optionMap = {};
+
+            if (options !== undefined) {
+
                 await client.query(
-                    `DELETE FROM product_options WHERE product_id = $1`,
+                    `
+                DELETE FROM product_options
+                WHERE product_id = $1
+                `,
                     [productId]
                 );
-                for (let i = 0; i < options.length; i++) {
-                    const option = options[i];
+
+                for (const option of options || []) {
+
                     const { rows: optionRows } = await client.query(
-                        `INSERT INTO product_options (product_id, name, position)
-                    VALUES ($1, $2, $3) RETURNING id`,
-                        [productId, option.name, i]
+                        `
+                    INSERT INTO product_options (
+                        product_id,
+                        name
+                    )
+                    VALUES ($1, $2)
+                    RETURNING id
+                    `,
+                        [productId, option.name]
                     );
+
                     const optionId = optionRows[0].id;
-                    for (let j = 0; j < option.values.length; j++) {
-                        await client.query(
-                            `INSERT INTO product_option_values (option_id, value, position)
-                        VALUES ($1, $2, $3)`,
-                            [optionId, option.values[j], j]
+
+                    optionMap[option.name] = {};
+
+                    for (const value of option.values) {
+
+                        const { rows: valueRows } = await client.query(
+                            `
+                        INSERT INTO product_option_values (
+                            option_id,
+                            value
+                        )
+                        VALUES ($1, $2)
+                        RETURNING id
+                        `,
+                            [optionId, value]
                         );
+
+                        optionMap[option.name][value] =
+                            valueRows[0].id;
                     }
                 }
             }
 
-            // 5. Update variants — delete old and insert new
-            if (hasVariants) {
-                await client.query(
-                    `DELETE FROM product_variants WHERE product_id = $1`,
+            /*
+            |--------------------------------------------------------------------------
+            | Update Variants
+            |--------------------------------------------------------------------------
+            */
+
+            if (variants !== undefined) {
+
+                const { rows: oldVariants } = await client.query(
+                    `
+                SELECT image
+                FROM product_variants
+                WHERE product_id = $1
+                AND image IS NOT NULL
+                `,
                     [productId]
                 );
-                for (const variant of variants) {
-                    const variantImageUrl = variant.image
-                        ? await uploadBase64ToS3(variant.image, 'products/variants')
-                        : null;
 
-                    const { rows: variantRows } = await client.query(
-                        `INSERT INTO product_variants (
-                        product_id, sku, barcode, price, compare_at_price,
-                        cost_price, stock, low_stock_threshold, weight, image
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    RETURNING id`,
-                        [
-                            productId, variant.sku ?? null,
-                            variant.barcode ?? null, variant.price,
-                            variant.compare_at_price ?? null,
-                            variant.cost_price ?? null, variant.stock,
-                            variant.low_stock_threshold ?? 5,
-                            variant.weight ?? null, variantImageUrl
-                        ]
-                    );
+                oldVariants.forEach(v => {
+                    if (v.image) {
+                        oldFilesToDelete.push(v.image);
+                    }
+                });
 
-                    const variantId = variantRows[0].id;
+                await client.query(
+                    `
+                DELETE FROM product_variants
+                WHERE product_id = $1
+                `,
+                    [productId]
+                );
 
-                    for (const optionValueId of variant.option_values) {
-                        await client.query(
-                            `INSERT INTO variant_option_values (variant_id, option_value_id)
-                        VALUES ($1, $2)`,
-                            [variantId, optionValueId]
-                        );
+                if (variants.length) {
+
+                    for (const variant of variants) {
+
+                        if (variant.price < 0) {
+                            throw new Error(
+                                "Variant price cannot be negative"
+                            );
+                        }
+
+                        if (variant.stock < 0) {
+                            throw new Error(
+                                "Variant stock cannot be negative"
+                            );
+                        }
+
+                        let variantImageUrl = null;
+
+                        if (variant.image) {
+
+                            const filename = `products/variants/${productId}-${crypto.randomUUID()}`;
+
+                            const upload = await uploadFileToS3(
+                                variant.image,
+                                filename
+                            );
+
+                            if (upload.error) {
+                                throw new Error(upload.message);
+                            }
+
+                            variantImageUrl = upload.url;
+
+                            uploadedFiles.push(upload.url);
+                        }
+
+                        const { rows: variantRows } =
+                            await client.query(
+                                `
+                            INSERT INTO product_variants (
+                                product_id,
+                                vendor_id,
+                                sku,
+                                barcode,
+                                price,
+                                compare_at_price,
+                                cost_price,
+                                stock,
+                                low_stock_threshold,
+                                weight,
+                                image
+                            )
+                            VALUES (
+                                $1, $2, $3, $4, $5,
+                                $6, $7, $8, $9, $10, $11
+                            )
+                            RETURNING id
+                            `,
+                                [
+                                    productId,
+                                    vendorId,
+                                    variant.sku ?? null,
+                                    variant.barcode ?? null,
+                                    variant.price,
+                                    variant.compare_at_price ?? null,
+                                    variant.cost_price ?? null,
+                                    variant.stock,
+                                    variant.low_stock_threshold ?? 5,
+                                    variant.weight ?? null,
+                                    variantImageUrl
+                                ]
+                            );
+
+                        const variantId = variantRows[0].id;
+
+                        if (variant.options) {
+
+                            for (const [
+                                optionName,
+                                optionValue
+                            ] of Object.entries(
+                                variant.options
+                            )) {
+
+                                const optionValueId =
+                                    optionMap?.[optionName]?.[
+                                    optionValue
+                                    ];
+
+                                if (!optionValueId) {
+                                    throw new Error(
+                                        `Invalid option mapping: ${optionName} -> ${optionValue}`
+                                    );
+                                }
+
+                                await client.query(
+                                    `
+                                INSERT INTO variant_option_values (
+                                    variant_id,
+                                    option_value_id
+                                )
+                                VALUES ($1, $2)
+                                `,
+                                    [
+                                        variantId,
+                                        optionValueId
+                                    ]
+                                );
+                            }
+                        }
                     }
                 }
             }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Commit
+            |--------------------------------------------------------------------------
+            */
 
             await client.query('COMMIT');
 
-            return await ProductModel.getProductById(updatedProduct.id);
+            /*
+            |--------------------------------------------------------------------------
+            | Delete Old S3 Files AFTER Commit
+            |--------------------------------------------------------------------------
+            */
+
+            await Promise.allSettled(
+                oldFilesToDelete.map(file =>
+                    S3delete(file)
+                )
+            );
+
+            return await Product.findByKey(
+                [{ key: 'id', value: updatedProduct.id }],
+                vendorId
+            );
+
         } catch (error) {
+
             await client.query('ROLLBACK');
-            console.error("Error updating product:", error);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Cleanup Newly Uploaded Files
+            |--------------------------------------------------------------------------
+            */
+
+            await Promise.allSettled(
+                uploadedFiles.map(file =>
+                    S3delete(file)
+                )
+            );
+
+            console.error(
+                "Error updating product:",
+                error
+            );
+
             throw error;
+
+        } finally {
+            client.release();
+        }
+    }
+
+    static async findAllByVendor(vendorId, filters = {}) {
+        const client = await pool.connect();
+
+        try {
+
+            const {
+                page = 1,
+                limit = 20,
+                search,
+                category_id,
+                subcategory_id,
+                status,
+                is_featured,
+                is_digital,
+                min_price,
+                max_price,
+                sort_by = "created_at",
+                sort_order = "DESC"
+            } = filters;
+
+            const offset = (page - 1) * limit;
+
+            /*
+            |--------------------------------------------------------------------------
+            | Allowed Sort Columns
+            |--------------------------------------------------------------------------
+            */
+
+            const allowedSortColumns = [
+                "created_at",
+                "updated_at",
+                "name",
+                "price",
+                "stock"
+            ];
+
+            const allowedSortOrders = ["ASC", "DESC"];
+
+            const finalSortBy = allowedSortColumns.includes(sort_by)
+                ? sort_by
+                : "created_at";
+
+            const finalSortOrder = allowedSortOrders.includes(
+                sort_order.toUpperCase()
+            )
+                ? sort_order.toUpperCase()
+                : "DESC";
+
+            /*
+            |--------------------------------------------------------------------------
+            | Build WHERE Conditions
+            |--------------------------------------------------------------------------
+            */
+
+            const conditions = [
+                `p.vendor_id = $1`,
+                `p.deleted_at IS NULL`
+            ];
+
+            const values = [vendorId];
+
+            let index = 2;
+
+            // Search
+            if (search) {
+                conditions.push(`
+                (
+                    p.name ILIKE $${index}
+                    OR p.description ILIKE $${index}
+                    OR p.brand ILIKE $${index}
+                )
+            `);
+
+                values.push(`%${search}%`);
+                index++;
+            }
+
+            // Category
+            if (category_id) {
+                conditions.push(`p.category_id = $${index}`);
+                values.push(category_id);
+                index++;
+            }
+
+            // Subcategory
+            if (subcategory_id) {
+                conditions.push(`p.subcategory_id = $${index}`);
+                values.push(subcategory_id);
+                index++;
+            }
+
+            // Status
+            if (status) {
+                conditions.push(`p.status = $${index}`);
+                values.push(status);
+                index++;
+            }
+
+            // Featured
+            if (is_featured !== undefined) {
+                conditions.push(`p.is_featured = $${index}`);
+                values.push(is_featured);
+                index++;
+            }
+
+            // Digital
+            if (is_digital !== undefined) {
+                conditions.push(`p.is_digital = $${index}`);
+                values.push(is_digital);
+                index++;
+            }
+
+            // Min Price
+            if (min_price !== undefined) {
+                conditions.push(`p.price >= $${index}`);
+                values.push(min_price);
+                index++;
+            }
+
+            // Max Price
+            if (max_price !== undefined) {
+                conditions.push(`p.price <= $${index}`);
+                values.push(max_price);
+                index++;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Total Count Query
+            |--------------------------------------------------------------------------
+            */
+
+            const countQuery = `
+            SELECT COUNT(*)::INTEGER AS total
+            FROM products p
+            WHERE ${conditions.join(" AND ")}
+        `;
+
+            const { rows: countRows } = await client.query(
+                countQuery,
+                values
+            );
+
+            const total = countRows[0].total;
+
+            /*
+            |--------------------------------------------------------------------------
+            | Main Query
+            |--------------------------------------------------------------------------
+            */
+
+            values.push(limit, offset);
+
+            const query = `
+            SELECT
+                p.id,
+                p.vendor_id,
+                p.category_id,
+                p.subcategory_id,
+                p.name,
+                p.slug,
+                p.description,
+                p.short_description,
+                p.brand,
+                p.tags,
+                p.price,
+                p.compare_at_price,
+                p.cost_price,
+                p.discount,
+                p.stock,
+                p.low_stock_threshold,
+                p.track_inventory,
+                p.has_variants,
+                p.thumbnail,
+                p.weight,
+                p.length,
+                p.width,
+                p.height,
+                p.free_shipping,
+                p.status,
+                p.is_featured,
+                p.is_digital,
+                p.meta_title,
+                p.meta_description,
+                p.created_at,
+                p.updated_at,
+
+                c.name AS category_name,
+                sc.name AS subcategory_name,
+
+                (
+                    SELECT COUNT(*)
+                    FROM product_images pi
+                    WHERE pi.product_id = p.id
+                )::INTEGER AS image_count,
+
+                (
+                    SELECT COALESCE(
+                        JSON_AGG(
+                            JSON_BUILD_OBJECT(
+                                'id', pi.id,
+                                'url', pi.url,
+                                'position', pi.position,
+                                'is_primary', pi.is_primary
+                            )
+                            ORDER BY pi.position ASC
+                        ),
+                        '[]'
+                    )
+                    FROM product_images pi
+                    WHERE pi.product_id = p.id
+                ) AS images
+
+            FROM products p
+
+            LEFT JOIN categories c
+                ON c.id = p.category_id
+
+            LEFT JOIN categories sc
+                ON sc.id = p.subcategory_id
+
+            WHERE ${conditions.join(" AND ")}
+
+            ORDER BY p.${finalSortBy} ${finalSortOrder}
+
+            LIMIT $${index}
+            OFFSET $${index + 1}
+        `;
+
+            const { rows } = await client.query(query, values);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Pagination Meta
+            |--------------------------------------------------------------------------
+            */
+
+            return {
+                data: rows,
+
+                pagination: {
+                    total,
+                    page: Number(page),
+                    limit: Number(limit),
+                    total_pages: Math.ceil(total / limit),
+                    has_next_page: page < Math.ceil(total / limit),
+                    has_prev_page: page > 1
+                }
+            };
+
+        } catch (error) {
+
+            console.error(
+                "Error fetching vendor products:",
+                error
+            );
+
+            throw error;
+
         } finally {
             client.release();
         }
@@ -602,7 +1369,6 @@ export class Product {
         }
     }
 
-    // ─── GET FILTERS (for frontend filter UI) ─────────
     static async getFilters(vendorId) {
         try {
             const { rows } = await pool.query(
@@ -640,7 +1406,6 @@ export class Product {
         }
     }
 
-    // ─── GET RELATED PRODUCTS ──────────────────────────
     static async getRelatedProducts(productId, vendorId, limit = 8) {
         try {
             // Get current product's category and tags
@@ -685,7 +1450,6 @@ export class Product {
         }
     }
 
-    // ─── GET FEATURED PRODUCTS ─────────────────────────
     static async getFeaturedProducts(vendorId, limit = 10) {
         try {
             const { rows } = await pool.query(

@@ -4,11 +4,9 @@ import { ROLES } from "#utils/helpers.js";
 class CustomerModel {
     static async getCustomerByEmail(email, vendor_id) {
         const { rows } = await pool.query(
-            `SELECT u.id, u.email, u.password, u.firstname, u.lastname,
-              u.role, u.status, u.email_verified, vc.vendor_id
+            `SELECT u.*
             FROM users u
-            INNER JOIN vendor_customers vc ON vc.user_id = u.id
-            WHERE u.email = $1 AND vc.vendor_id = $2 AND u.role = $3
+            WHERE u.email = $1 AND u.vendor_id = $2 AND u.role = $3
             LIMIT 1`,
             [email, vendor_id, ROLES.CUSTOMER]
         );
@@ -17,11 +15,9 @@ class CustomerModel {
 
     static async getCustomerByPhone(phone, vendor_id) {
         const { rows } = await pool.query(
-            `SELECT u.id, u.email, u.password, u.firstname, u.lastname,
-              u.role, u.status, u.email_verified, vc.vendor_id
+            `SELECT u.*
             FROM users u
-            INNER JOIN vendor_customers vc ON vc.user_id = u.id
-            WHERE u.phone = $1 AND vc.vendor_id = $2 AND u.role = $3
+            WHERE u.phone = $1 AND u.vendor_id = $2 AND u.role = $3
             LIMIT 1`,
             [phone, vendor_id, ROLES.CUSTOMER]
         );
@@ -30,11 +26,9 @@ class CustomerModel {
 
     static async getCustomerById(user_id, vendor_id) {
         const { rows } = await pool.query(
-            `SELECT u.id, u.email, u.firstname, u.lastname,
-              u.role, u.status, u.email_verified, vc.vendor_id
+            `SELECT u.*
             FROM users u
-            INNER JOIN vendor_customers vc ON vc.user_id = u.id
-            WHERE u.id = $1 AND vc.vendor_id = $2 AND u.role = $3
+            WHERE u.id = $1 AND u.vendor_id = $2 AND u.role = $3
             LIMIT 1`,
             [user_id, vendor_id, ROLES.CUSTOMER]
         );

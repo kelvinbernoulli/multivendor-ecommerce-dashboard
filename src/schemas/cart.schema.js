@@ -4,7 +4,7 @@ export const addToCartSchema = Joi.object({
     product_id: Joi.number().integer().positive().required().label("Product ID"),
     variant_id: Joi.number().integer().positive().optional().label("Variant ID"),
     quantity:   Joi.number().integer().min(1).max(100).required().label("Quantity"),
-});
+}).min(1);
 
 export const upsertCartSchema = Joi.object({
     product_id: Joi.number().integer().positive().required().label("Product ID"),

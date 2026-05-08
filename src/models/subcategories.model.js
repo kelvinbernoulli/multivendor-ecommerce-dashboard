@@ -2,19 +2,21 @@ import pool from "#services/pg_pool.js";
 
 export class Subcategory {
     static async create(data) {
-        const { subcategory_name, category_id, subcategory_image, vendor_id, description } = data;
+        console.log('Creating subcategory with data:', data);
+        const { name, category_id, image, vendorId, description } = data;
+        const slug = name.toLowerCase().replace(/\s+/g, '-');
         const result = await pool.query(`
             INSERT INTO subcategories
-                (subcategory_name, category_id, subcategory_image, status, vendor_id, description)
-            VALUES ($1, $2, $3, true, $4)
+                (name, slug, category_id, image, status, vendor_id, description)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *`,
-            [subcategory_name, category_id, subcategory_image ?? null, vendor_id, description ?? null]
+            [name, slug, category_id, image ?? null, true, vendorId, description ?? null]
         );
         return result;
     }
 
     static async update(subcategoryId, vendorId, data) {
-        const allowed = ['subcategory_name', 'category_id', 'description', 'subcategory_image', 'status'];
+        const allowed = ['name', 'category_id', 'description', 'image', 'status'];
         const fields = [];
         const values = [];
 
@@ -58,7 +60,7 @@ export class Subcategory {
     static async duplicateCheck(subcategoryName, vendorId) {
         const { rows } = await pool.query(`
             SELECT * FROM subcategories
-            WHERE subcategory_name = $1 AND vendor_id = $2 AND deleted_at IS NULL
+            WHERE name = $1 AND vendor_id = $2 AND deleted_at IS NULL
             LIMIT 1`,
             [subcategoryName, vendorId]
         );
@@ -66,6 +68,7 @@ export class Subcategory {
     }
 
     static async fetchById(subcategoryId, vendorId) {
+        console.log('Fetching subcategory by ID:', { subcategoryId, vendorId });
         const { rows } = await pool.query(`
             SELECT * FROM subcategories
             WHERE id = $1 AND vendor_id = $2 AND deleted_at IS NULL

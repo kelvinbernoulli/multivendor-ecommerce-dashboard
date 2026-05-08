@@ -13,14 +13,14 @@ const router = Router();
 //categories
 router.post("/category/create", authenticated, CategoriesController.createCategory);
 router.get("/categories", pagination, authenticated, CategoriesController.fetchVendorCategories);
-router.get("/category/:id", authenticated, CategoriesController.fetchCategoryById);
+router.get("/category/:categoryId", authenticated, CategoriesController.fetchCategoryById);
 router.patch("/category/update/:categoryId", authenticated, CategoriesController.updateCategory);
 router.delete("/category/delete/:categoryId", authenticated, CategoriesController.deleteCategory);
 
 //subcategories
 router.post("/subcategory/create", authenticated, SubcategoriesController.createSubcategory);
 router.get("/subcategories", pagination, authenticated, SubcategoriesController.fetchVendorSubcategories);
-router.get("/subcategory/:id", authenticated, SubcategoriesController.fetchSubcategoryById);
+router.get("/subcategory/:subcategoryId", authenticated, SubcategoriesController.fetchSubcategoryById);
 router.patch("/subcategory/update/:subcategoryId", authenticated, SubcategoriesController.updateSubcategory);
 router.delete("/subcategory/delete/:subcategoryId", authenticated, SubcategoriesController.deleteSubcategory);
 

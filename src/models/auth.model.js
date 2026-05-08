@@ -41,13 +41,13 @@ export class Auth {
         const redisKey = buildRedisKey(user.email, 'email_verification', vendorId, userId);
         await redisClient.set(redisKey, code.toString(), { EX: 300 });
 
-        const baseUrl = vendorId
-            ? await getVendorBaseUrl(vendorId)  // fetch vendor's website_url separately
-            : process.env.DEV_URL;
+        // const baseUrl = vendorId
+        //     ? await getVendorBaseUrl(vendorId)
+        //     : process.env.DEV_URL;
 
-        if (!baseUrl) throw new Error('Base URL is not defined');
+        // if (!baseUrl) throw new Error('Base URL is not defined');
 
-        const link = new URL('/v1/auth/verify-email', baseUrl);
+        const link = new URL('/v1/auth/verify-email', process.env.DEV_URL);
         link.searchParams.set('token', encryptedCode);
         link.searchParams.set('email', user.email);
         link.searchParams.set('userId', encryptedUserId);
@@ -91,13 +91,13 @@ export class Auth {
         const redisKey = buildRedisKey(user.email, 'password_reset ', vendorId, userId);
         await redisClient.set(redisKey, code.toString(), { EX: 300 });
 
-        const baseUrl = vendorId
-            ? await getVendorBaseUrl(vendorId)  // fetch vendor's website_url separately
-            : process.env.DEV_URL;
+        // const baseUrl = vendorId
+        //     ? await getVendorBaseUrl(vendorId)
+        //     : process.env.DEV_URL;
 
-        if (!baseUrl) throw new Error('Base URL is not defined');
+        // if (!baseUrl) throw new Error('Base URL is not defined');
 
-        const link = new URL('/v1/auth/password-reset/confirm', baseUrl);
+        const link = new URL('/v1/auth/password-reset/confirm', process.env.DEV_URL);
         link.searchParams.set('token', encryptedCode);
         link.searchParams.set('email', user.email);
         link.searchParams.set('userId', encryptedUserId);

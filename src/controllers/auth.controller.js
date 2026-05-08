@@ -70,57 +70,56 @@ export const customerSignup = async (req, res) => {
     try {
         const { body } = req;
 
-        const { error } = registerSchema.validate(body);
+        const { error, value } = registerSchema.validate(body);
         if (error) {
             return respondWithError(res, 422, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const { email, password, country_id, vendor_id } = body;
-
-        if (!validatePassword(password)) {
+        if (!validatePassword(value.password)) {
             return respondWithError(res, 422, "Password does not meet the required criteria!", ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const vendorData = await UserModel.getVendorById(vendor_id);
+        const vendorData = await VendorModel.getVendorById(value.vendor_id);
         if (!vendorData) {
             return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
         }
 
-        const userData = await CustomerModel.getCustomerByEmail(email, vendor_id);
+        const userData = await CustomerModel.getCustomerByEmail(value.email, value.vendor_id);
         if (userData) {
-            return respondWithError(res, 409, `Email ${email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
+            return respondWithError(res, 409, `Email ${value.email} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
-        const countryData = await UserModel.getCountryById(country_id);
+        const countryData = await UserModel.getCountryById(value.country_id);
         if (!countryData) {
             return respondWithError(res, 422, "Invalid country ID!", ERROR_CODES.VALIDATION_ERROR);
         }
-        const normalizedphone = normalizePhone(phone, countryData.country_code);
+        const normalizedphone = normalizePhone(value.phone, countryData.country_code);
 
-        const phoneData = await CustomerModel.getCustomerByPhone(normalizedphone, vendor_id);
+        const phoneData = await CustomerModel.getCustomerByPhone(normalizedphone, value.vendor_id);
         if (phoneData) {
             return respondWithError(res, 409, `Phone ${normalizedphone} already exists!`, ERROR_CODES.DUPLICATE_RESOURCE);
         }
 
-        const hashpassword = await passwordHash(password)
+        const hashpassword = await passwordHash(value.password);
 
         const role = ROLES.CUSTOMER;
 
         const newUser = {
-            ...body,
+            ...value,
             password: hashpassword,
             phone: normalizedphone,
             role
         };
 
-        const createUser = await UserModel.createUser(newUser);
-        if (!createUser.success) {
-            return respondWithError(res, createUser.code, createUser.message, ERROR_CODES.INTERNAL_SERVER_ERROR);
+        const createUser = await UserModel.createUser(newUser, value.vendor_id);
+        if (!createUser) {
+            return respondWithError(res, 400, "Failed to create user", ERROR_CODES.RESOURCE_CREATE_FAILED);
         }
-        delete body.password;
-        await Auth.activateAccount(email);
 
-        return respondWithSuccess(res, 200, "Verification email sent, please check your email", body);
+        delete value.password;
+        await Auth.activateAccount(value.email);
+
+        return respondWithSuccess(res, 200, "Verification email sent, please check your email", value);
 
     } catch (error) {
         console.error("Error during user registration:", error);
@@ -168,19 +167,21 @@ export const verifyEmail = async (req, res) => {
 
 export const resendVerification = async (req, res) => {
     try {
-        const { email, vendorId } = req.body;
+        const { email, vendor_id } = req.body;
 
         let user;
-        if (vendorId) {
-            user = await VendorModel.getVendorUserByEmail(email, vendorId);
+        if (vendor_id) {
+            user = await CustomerModel.getCustomerByEmail(email, vendor_id)
+                || await VendorModel.getVendorAdminByEmail(email, vendor_id);
         } else {
             user = await UserModel.getUserByEmail(email);
         }
+
         if (!user) {
             return respondWithError(res, 404, 'User not found', ERROR_CODES.RESOURCE_NOT_FOUND);
         }
 
-        const resend = await Auth.activateAccount(user.id, vendorId);
+        const resend = await Auth.activateAccount(user.id, vendor_id);
         if (!resend.success) {
             return respondWithError(res, 400, resend.message, resend.code);
         }
@@ -191,66 +192,15 @@ export const resendVerification = async (req, res) => {
     }
 };
 
-export const customerSignIn = async (req, res) => {
-    try {
-        const { body } = req;
-        const { error } = loginSchema.validate(body, { abortEarly: false });
-        if (error) {
-            return respondWithError(res, 400, error.details.map((d) => d.message).join(', '), ERROR_CODES.VALIDATION_ERROR);
-        }
-
-        const { email, password, vendor_id } = body;
-
-        const vendorData = await UserModel.getVendorById(vendor_id);
-        if (!vendorData) {
-            return respondWithError(res, 404, 'Vendor not found', ERROR_CODES.RESOURCE_NOT_FOUND);
-        }
-        const user = await CustomerModel.getCustomerByEmail(email, vendor_id);
-
-        if (!user) {
-            return respondWithError(res, 404, 'User not found', ERROR_CODES.RESOURCE_NOT_FOUND);
-        }
-
-        if (!user.email_verified) {
-            return respondWithError(res, 403, 'Email not verified', ERROR_CODES.EMAIL_NOT_VERIFIED);
-        }
-
-        if (user.status !== 'active') {
-            return respondWithError(res, 403, 'Account is not active. Contact support.', ERROR_CODES.ACCOUNT_INACTIVE);
-        }
-
-        const passwordValid = await verifyPassword(password, user.password);
-        if (!passwordValid) {
-            return respondWithError(res, 401, 'Invalid password', ERROR_CODES.INVALID_CREDENTIALS);
-        }
-
-        await new Promise((resolve, reject) => {
-            req.session.regenerate((err) => (err ? reject(err) : resolve()));
-        });
-
-        req.session.user = {
-            id: Number(user.id),
-            email: user.email,
-            role: user.role,
-            status: user.status,
-            ...(vendor_id && { vendor_id }),
-        };
-
-    } catch (error) {
-        console.error(error);
-        return respondWithError(res, 500, error.message || 'Internal server error', ERROR_CODES.INTERNAL_SERVER_ERROR);
-    }
-};
-
 export const adminSignIn = async (req, res) => {
     try {
         const { body } = req;
-        const { error } = loginSchema.validate(body, { abortEarly: false });
+        const { error, value } = loginSchema.validate(body, { abortEarly: false, stripUnknown: true });
         if (error) {
             return respondWithError(res, 400, error.details.map((d) => d.message).join(', '), ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const { email, password, vendor_id } = body;
+        const { email, password, vendor_id } = value;
 
         let user;
         if (vendor_id) {
@@ -300,12 +250,12 @@ export const adminSignIn = async (req, res) => {
 export const customerSignin = async (req, res) => {
     try {
         const { body } = req;
-        const { error } = loginSchema.validate(body, { abortEarly: false });
+        const { error, value } = loginSchema.validate(body, { abortEarly: false, stripUnknown: true });
         if (error) {
             return respondWithError(res, 400, error.details.map((d) => d.message).join(', '), ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const { email, password, vendor_id } = body;
+        const { email, password, vendor_id } = value;
 
         const vendorData = await VendorModel.getVendorById(vendor_id);
         if (!vendorData) {
@@ -337,7 +287,7 @@ export const customerSignin = async (req, res) => {
         req.session.user = {
             ...user
         };
-        console.log(req.session.user);
+        
         return respondWithSuccess(res, 200, 'Login successful', user);
     } catch (error) {
         console.error(error);
@@ -395,7 +345,7 @@ export const confirmPasswordReset = async (req, res) => {
     try {
         const { body, query } = req;
         const { new_password } = body;
-        const { email, token, userId, vendorId  } = query;
+        const { email, token, userId, vendorId } = query;
 
         const decryptedToken = decrypt(token);
         const decryptedUserId = decrypt(userId);

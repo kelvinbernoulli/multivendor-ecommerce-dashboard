@@ -33,7 +33,7 @@ router.get("/products/featured", authenticated, pagination, ProductController.ge
 router.post("/cart/items/add", isCustomer, CartController.addToCart);
 router.get("/cart/items", pagination, isCustomer, CartController.cartItems);
 router.patch("/cart/items/update", isCustomer, CartController.upsertCart);
-router.post("/cart/items/remove", isCustomer, CartController.removeFromCart);
+router.delete("/cart/items/remove/:itemId", isCustomer, CartController.removeFromCart);
 
 //checkout
 router.get("/cart/preview-checkout", isCustomer, CartController.previewCheckout);

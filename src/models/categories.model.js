@@ -2,19 +2,20 @@ import pool from '#services/pg_pool.js';
 
 export class Category {
 
-    static async create({ category_name, description, category_image, vendor_id }) {
+    static async create({ name, description, image, vendorId }) {
+        const slug = name.toLowerCase().replace(/\s+/g, '-');
         const result = await pool.query(`
             INSERT INTO categories
-                (category_name, description, category_image, status, vendor_id)
-            VALUES ($1, $2, $3, true, $4)
+                (name, slug, description, image, status, vendor_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *`,
-            [category_name, description ?? null, category_image ?? null, vendor_id]
+            [name, slug, description ?? null, image ?? null, true, vendorId]
         );
         return result;
     }
 
     static async update(categoryId, vendorId, body) {
-        const allowed = ['category_name', 'description', 'category_image', 'status'];
+        const allowed = ['name', 'description', 'image', 'status'];
         const fields = [];
         const values = [];
 
@@ -58,7 +59,7 @@ export class Category {
     static async duplicateCheck(categoryName, vendorId) {
         const { rows } = await pool.query(`
             SELECT * FROM categories
-            WHERE category_name = $1 AND vendor_id = $2 AND deleted_at IS NULL
+            WHERE name = $1 AND vendor_id = $2 AND deleted_at IS NULL
             LIMIT 1`,
             [categoryName, vendorId]
         );
@@ -67,6 +68,7 @@ export class Category {
 
 
     static async fetchById(categoryId, vendorId) {
+        console.log('Fetching category by ID:', { categoryId, vendorId });
         const { rows } = await pool.query(`
             SELECT * FROM categories
             WHERE id = $1 AND vendor_id = $2 AND deleted_at IS NULL
@@ -84,7 +86,7 @@ export class Category {
             RETURNING id`,
             [categoryId, vendorId]
         );
-        return rows[0] ?? null; // null = not found or already deleted
+        return rows[0] ?? null;
     }
 }
 

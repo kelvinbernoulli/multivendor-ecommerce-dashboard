@@ -5,29 +5,32 @@ import { respondWithError, respondWithSuccess } from "#utils/response.js";
 
 export const addToCart = async (req, res) => {
     try {
-        const { body, session, params } = req;
+        const { body, session } = req;
+
         const user = session?.user;
 
         if (!user) {
-            return respondWithError(res, 401, 'Unauthorized', ERROR_CODES.UNAUTHORIZED);
+            return respondWithError(res, 401, "Unauthorized", ERROR_CODES.UNAUTHORIZED);
         }
 
-        const { error } = addToCartSchema.validate(body);
+        const { error, value } = addToCartSchema.validate(body, { abortEarly: false, stripUnknown: true });
         if (error) {
-            return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
+            console.error("Add to cart validation error:", error);
+            const errors = error.details.map(err => ({ field: err.path.join("."), message: err.message }));
+            return respondWithError(res, 400, errors, ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const result = await Cart.addToCart(user.id, user.vendor_id, body);
+        const result = await Cart.addToCart(user.id, value);
 
-        // Handle model-level errors
         if (result?.error) {
-            return respondWithError(res, result.code, result.error, ERROR_CODES.VALIDATION_ERROR);
+            return respondWithError(res, 400, result.error, ERROR_CODES.VALIDATION_ERROR);
         }
 
-        return respondWithSuccess(res, 200, 'Item added to cart', result);
+        return respondWithSuccess(res, 200,"Item added to cart", result);
+
     } catch (error) {
-        console.error("Error adding to cart:", error);
-        return respondWithError(res, 500, error.message || 'Internal Server Error', ERROR_CODES.INTERNAL_SERVER_ERROR);
+        console.error("Add to cart controller error:", error);
+        return respondWithError(res, 500, error.message || "Internal Server Error", ERROR_CODES.INTERNAL_SERVER_ERROR);
     }
 };
 
@@ -56,19 +59,19 @@ export const cartItems = async (req, res) => {
 
 export const upsertCart = async (req, res) => {
     try {
-        const { body, session, params } = req;
+        const { body, session } = req;
         const user = session?.user;
 
         if (!user) {
             return respondWithError(res, 401, 'Unauthorized', ERROR_CODES.UNAUTHORIZED);
         }
 
-        const { error } = upsertCartSchema.validate(body);
+        const { error, value } = upsertCartSchema.validate(body);
         if (error) {
             return respondWithError(res, 400, error.details[0].message, ERROR_CODES.VALIDATION_ERROR);
         }
 
-        const result = await Cart.upsertCartItem(user.id, user.vendor_id, body);
+        const result = await Cart.updateCart(user.id, user.vendor_id, value);
         if (result?.error) {
             return respondWithError(res, result.code, result.error, ERROR_CODES.VALIDATION_ERROR);
         }
@@ -89,13 +92,13 @@ export const removeFromCart = async (req, res) => {
             return respondWithError(res, 401, 'Unauthorized', ERROR_CODES.UNAUTHORIZED);
         }
 
-        const { cart_item_id } = params;
+        const { itemId } = params;
 
-        if (!cart_item_id) {
+        if (!itemId) {
             return respondWithError(res, 400, 'Cart item ID is required', ERROR_CODES.BAD_REQUEST);
         }
 
-        const result = await Cart.removeFromCart(user.id, user.vendor_id, cart_item_id);
+        const result = await Cart.removeFromCart(user.id, user.vendor_id, itemId);
 
         if (result?.error) {
             return respondWithError(res, result.code, result.error, ERROR_CODES.RESOURCE_NOT_FOUND);
